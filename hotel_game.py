@@ -677,9 +677,52 @@ _RARE_EVENTS = [
     },
 ]
 
+_GARDEN_INSPIRATIONS = [
+    {
+        "id": "spring_meal",
+        "season": "spring",
+        "name": "春芽汤意",
+        "target": "meal",
+        "uses": 2,
+        "line": "你看见新芽贴着石缝，忽然知道今天的汤该多一点清甜。",
+    },
+    {
+        "id": "summer_greet",
+        "season": "summer",
+        "name": "萤光话题",
+        "target": "greet",
+        "uses": 2,
+        "line": "萤光在竹影里一闪，你记住了一个适合前厅闲谈的开头。",
+    },
+    {
+        "id": "autumn_room",
+        "season": "autumn",
+        "name": "落叶安顿",
+        "target": "room",
+        "uses": 2,
+        "line": "落叶停在门槛边，像在提醒你把钥匙牌交得更稳一点。",
+    },
+    {
+        "id": "winter_bath",
+        "season": "winter",
+        "name": "雪汽热意",
+        "target": "bath",
+        "uses": 2,
+        "line": "雪光映进汤屋方向，你记住了让热气慢慢包住人的方法。",
+    },
+    {
+        "id": "quiet_complaint",
+        "season": None,
+        "name": "石灯静心",
+        "target": "complaint",
+        "uses": 1,
+        "line": "石灯没有亮，却把你的话放慢了一拍。",
+    },
+]
+
 _HELP_TEXT = (
     "可说：去 前厅/客房/厨房/温泉/庭院/商店；客人；安排 全部；"
-    + "做饭 1；温泉 全部；客诉 全部；备料；拾柴；打扫；招呼；"
+    + "照顾 全部；做饭 1；温泉 全部；客诉 全部；备料；拾柴；打扫；招呼；"
     + "买 食材 3；升级 厨房；图鉴；状态；年度总结；结束一天。"
     + "可用分号、换行或“然后”输入批量指令。"
 )
@@ -742,6 +785,8 @@ def _fresh_game(seed: Any) -> dict[str, Any]:
         "guest_seq": 0,
         "guests": [],
         "today_event": "",
+        "garden_seen_day": 0,
+        "inspiration": {"day": 0, "target": "", "name": "", "uses": 0},
         "annual": _new_annual_stats(),
         "year_reports": [],
         "codex": [],
@@ -787,6 +832,8 @@ def _migrate(game: dict[str, Any]) -> dict[str, Any]:
     game.setdefault("codex", [])
     game.setdefault("guests", [])
     game.setdefault("today_event", "")
+    game.setdefault("garden_seen_day", 0)
+    game.setdefault("inspiration", {"day": 0, "target": "", "name": "", "uses": 0})
     game.setdefault("clock", 0)
     game.setdefault("year_reports", [])
     _annual(game)
@@ -971,12 +1018,75 @@ def _garden_scene(game: dict[str, Any]) -> str:
     )
 
 
+def _active_inspiration(game: dict[str, Any]) -> str:
+    inspiration = game.get("inspiration", {})
+    if not isinstance(inspiration, dict):
+        return ""
+    if inspiration.get("day") != game.get("day"):
+        return ""
+    if int(inspiration.get("uses", 0)) <= 0:
+        return ""
+    return str(inspiration.get("name", ""))
+
+
+def _garden_daily_moment(game: dict[str, Any]) -> str:
+    if game.get("garden_seen_day") == game.get("day"):
+        return ""
+    game["garden_seen_day"] = game["day"]
+    lines = ["庭院小记：{}".format(_garden_scene(game))]
+    rare = _maybe_rare(game, "garden")
+    if rare:
+        lines.append(rare)
+    chance = 45 + int(game["upgrades"].get("garden", 0)) * 12
+    if _chance(game, chance):
+        season_id = _season(game)["id"]
+        possible = [
+            item
+            for item in _GARDEN_INSPIRATIONS
+            if item["season"] is None or item["season"] == season_id
+        ]
+        inspiration = possible[_randrange(game, len(possible))]
+        game["inspiration"] = {
+            "day": game["day"],
+            "target": inspiration["target"],
+            "name": inspiration["name"],
+            "uses": inspiration["uses"],
+        }
+        lines.append(
+            "季节灵感《{}》：{}今天接下来{}次相关照顾心情+1。".format(
+                inspiration["name"],
+                inspiration["line"],
+                inspiration["uses"],
+            )
+        )
+    else:
+        lines.append("你在院里停了一会儿，没有急着把这点安静变成安排。")
+    return "\n".join(lines)
+
+
+def _use_inspiration(game: dict[str, Any], target: str) -> int:
+    inspiration = game.get("inspiration", {})
+    if not isinstance(inspiration, dict):
+        return 0
+    if inspiration.get("day") != game.get("day"):
+        return 0
+    if inspiration.get("target") != target:
+        return 0
+    uses = int(inspiration.get("uses", 0))
+    if uses <= 0:
+        return 0
+    inspiration["uses"] = uses - 1
+    return 1
+
+
 def _start_day(game: dict[str, Any]) -> str:
     game["day"] += 1
     season = _season(game)
     weather = _weighted_choice(game, _weather_options(game["day"]))
     game["weather"] = weather["id"]
     game["today_event"] = ""
+    game["garden_seen_day"] = 0
+    game["inspiration"] = {"day": game["day"], "target": "", "name": "", "uses": 0}
     game["clock"] = 0
     game["max_energy"] = 6 + min(2, int(game["upgrades"]["garden"]))
     game["energy"] = game["max_energy"]
@@ -1111,6 +1221,7 @@ def _status_line(game: dict[str, Any]) -> str:
         "loc": _loc_name(game["location"]),
         "weather": _weather(game)["name"],
         "event": _today_event(game)["title"] if _today_event(game) else "",
+        "inspiration": _active_inspiration(game),
         "money": game["money"],
         "food": game["food"],
         "wood": game["wood"],
@@ -1154,6 +1265,8 @@ def _handle_command(game: dict[str, Any], raw: str) -> str:
         return _upgrade(game, text)
     if _has(text, ["结束", "过夜", "睡觉", "明天", "下一天", "end", "night"]):
         return _end_day(game)
+    if _has(text, ["标准接待", "照顾", "接待流程", "care"]):
+        return _standard_care(game, text)
     if _has(text, ["安排", "开房", "入住", "房间", "room", "checkin"]):
         return _assign_rooms(game, text)
     if _has(text, ["做饭", "餐食", "晚饭", "早餐", "吃饭", "meal", "cook", "feed"]):
@@ -1196,7 +1309,11 @@ def _move(game: dict[str, Any], text: str) -> str:
         return "可去：{}。".format("、".join(_loc_name(key) for key in _LOCATIONS))
     game["location"] = target
     if target == "garden":
-        _record_action(game, "garden_visits")
+        if game.get("garden_seen_day") != game.get("day"):
+            _record_action(game, "garden_visits")
+        moment = _garden_daily_moment(game)
+        if moment:
+            return "你来到{}。{}\n{}".format(_loc_name(target), _LOCATIONS[target]["look"], moment)
         return "你来到{}。{}\n{}".format(_loc_name(target), _LOCATIONS[target]["look"], _garden_scene(game))
     return "你来到{}。{}".format(_loc_name(target), _LOCATIONS[target]["look"])
 
@@ -1245,10 +1362,16 @@ def _trait(guest: dict[str, Any]) -> dict[str, Any]:
 def _brief_status(game: dict[str, Any]) -> str:
     event = _today_event(game)
     event_text = "，今日小事：{}".format(event["title"]) if event else ""
+    inspiration = _active_inspiration(game)
+    inspiration_text = "，灵感：{}".format(inspiration) if inspiration else ""
+    room_warning = ""
+    waiting_rooms = sum(1 for guest in game["guests"] if not guest["room"])
+    if waiting_rooms:
+        room_warning = " 提醒：还有{}位客人的钥匙牌没有交出去，未安排房间的客人不会入住。".format(waiting_rooms)
     return (
         (
             "{}，{}，{}{}，你在{}。钱{}，食材{}，柴火{}，体力{}/{}，客人{}位，"
-            + "房间{}/{}，记忆{}，图鉴{}。"
+            + "房间{}/{}，记忆{}，图鉴{}{}。{}"
         ).format(
             _date_text(game["day"]),
             _time_label(game),
@@ -1265,6 +1388,8 @@ def _brief_status(game: dict[str, Any]) -> str:
             _room_capacity(game),
             game["memory"],
             len(game["codex"]),
+            inspiration_text,
+            room_warning,
         )
     )
 
@@ -1418,6 +1543,22 @@ def _need_location(game: dict[str, Any], key: str) -> str:
     )
 
 
+def _standard_care(game: dict[str, Any], text: str) -> str:
+    scope = "全部" if _has(text, ["全部", "所有", "all", "大家"]) else "全部"
+    steps = [
+        ("rooms", "房间", _assign_rooms, "安排 {}".format(scope)),
+        ("kitchen", "餐食", _serve_meals, "做饭 {}".format(scope)),
+        ("onsen", "温泉", _serve_bath, "温泉 {}".format(scope)),
+        ("front", "客诉", _handle_complaints, "客诉 {}".format(scope)),
+    ]
+    lines = ["标准接待开始：按房间→餐食→温泉→客诉照顾。"]
+    for location, label, action, command_text in steps:
+        game["location"] = location
+        result = action(game, command_text)
+        lines.append("【{}】{}".format(label, result))
+    return "\n".join(lines)
+
+
 def _assign_rooms(game: dict[str, Any], text: str) -> str:
     need = _need_location(game, "rooms")
     if need:
@@ -1439,6 +1580,7 @@ def _assign_rooms(game: dict[str, Any], text: str) -> str:
         trait = _trait(guest)
         mood = 1 + (1 if game["weather"] == "sun" else 0)
         mood += int(trait.get("room", 0)) + int(_event_value(game, "room_mood", 0))
+        mood += _use_inspiration(game, "room")
         guest["mood"] += mood
         lines.append("给{}安排了房间，钥匙牌轻轻一响，心情{:+d}。".format(guest["name"], mood))
     return "\n".join(lines)
@@ -1472,6 +1614,7 @@ def _serve_meals(game: dict[str, Any], text: str) -> str:
         if guest["type"] == "apprentice_cook":
             mood += 1
         mood += int(trait.get("meal", 0)) + int(_event_value(game, "meal_mood", 0))
+        mood += _use_inspiration(game, "meal")
         guest["mood"] += mood
         lines.append("给{}端上餐食，心情+{}。".format(guest["name"], mood))
     return "\n".join(lines)
@@ -1504,6 +1647,7 @@ def _serve_bath(game: dict[str, Any], text: str) -> str:
         trait = _trait(guest)
         mood = 2 + (1 if onsen >= 1 else 0) + (1 if game["weather"] == "rain" else 0)
         mood += int(trait.get("bath", 0))
+        mood += _use_inspiration(game, "bath")
         guest["mood"] += mood
         served += 1
         lines.append("给{}备好温泉，耗柴{}，心情+{}。".format(guest["name"], wood_cost, mood))
@@ -1530,6 +1674,7 @@ def _handle_complaints(game: dict[str, Any], text: str) -> str:
         _record_action(game, "complaints")
         guest["complaint"] = False
         mood = 2 + int(game["upgrades"]["sign"] > 1) + int(_event_value(game, "complaint_mood", 0))
+        mood += _use_inspiration(game, "complaint")
         guest["mood"] += mood
         lines.append("你认真听完{}的抱怨，并补上一杯热茶，心情+{}。".format(guest["name"], mood))
     return "\n".join(lines)
@@ -1617,9 +1762,10 @@ def _greet(game: dict[str, Any]) -> str:
     if not game["guests"]:
         return "你把前厅的灯调亮一点，虽然今天没有客人。"
     extra = 0
+    inspiration_bonus = _use_inspiration(game, "greet")
     for guest in game["guests"]:
         if not guest["complaint"]:
-            mood = 1 + int(_trait(guest).get("greet", 0))
+            mood = 1 + int(_trait(guest).get("greet", 0)) + inspiration_bonus
             guest["mood"] += mood
             if mood > 1:
                 extra += 1
@@ -1785,6 +1931,13 @@ def _end_day(game: dict[str, Any]) -> str:
     if not game["guests"]:
         return _start_day(game)
     lines = ["夜里，你把柜台灯调暗，开始结今天的账。"]
+    unassigned = [guest for guest in game["guests"] if not guest["room"]]
+    if unassigned:
+        lines.append(
+            "提醒：还有{}位客人的钥匙牌没有交出去；未安排房间的客人不会入住，哪怕已经吃过饭。".format(
+                len(unassigned)
+            )
+        )
     income = 0
     memory_gain = 0
     unresolved = 0

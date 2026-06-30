@@ -56,8 +56,18 @@ class HotelGameTests(unittest.TestCase):
         out = hotel_game.cmd("客人")
         status = status_from(out)
         self.assertIn("event", status)
+        self.assertIn("inspiration", status)
         self.assertIn("性格：", out)
         self.assertIn("愿望：", out)
+
+    def test_standard_care_and_unassigned_room_warning(self):
+        out = hotel_game.cmd("照顾 全部")
+        status = status_from(out)
+        self.assertIn("标准接待开始", out)
+        self.assertEqual(status["todo"]["room"], 0)
+        hotel_game.new_game("warning-seed")
+        out = hotel_game.cmd("去 厨房; 做饭 全部; 结束一天")
+        self.assertIn("未安排房间的客人不会入住", out)
 
     def test_time_seasons_garden_and_year_summary(self):
         start = status_from(hotel_game.cmd("状态"))
@@ -66,7 +76,7 @@ class HotelGameTests(unittest.TestCase):
         after_action = status_from(hotel_game.cmd("去 客房; 安排 1"))
         self.assertEqual(after_action["time"], "上午")
         garden = hotel_game.cmd("去 庭院")
-        self.assertIn("庭院是", garden)
+        self.assertIn("庭院小记", garden)
         for _ in range(27):
             hotel_game.cmd("结束一天")
         out = hotel_game.cmd("结束一天")
