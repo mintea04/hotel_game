@@ -64,6 +64,9 @@ class HotelGameTests(unittest.TestCase):
         status = status_from(out)
         self.assertIn("event", status)
         self.assertIn("inspiration", status)
+        self.assertIn("rate", status)
+        self.assertIn("promise", status)
+        self.assertIn("rooms", status)
         self.assertIn("性格：", out)
         self.assertIn("愿望：", out)
 
@@ -76,6 +79,21 @@ class HotelGameTests(unittest.TestCase):
         out = hotel_game.cmd("去 厨房; 做饭 全部; 结束一天")
         self.assertIn("未安排房间的客人不会入住", out)
 
+    def test_capacity_warning_and_services_require_room(self):
+        hotel_game.new_game("staff-seed")
+        advice = hotel_game.cmd("建议")
+        self.assertIn("今天房间不够", advice)
+        kitchen = hotel_game.cmd("去 厨房; 做饭 全部")
+        self.assertIn("只给已安排房间的住客上餐", kitchen)
+        onsen = hotel_game.cmd("去 温泉; 温泉 全部")
+        self.assertIn("已安排房间的住客", onsen)
+        out = hotel_game.cmd("照顾 全部")
+        status = status_from(out)
+        self.assertEqual(status["rooms"], {"cap": 2, "used": 2})
+        self.assertEqual(status["todo"]["room"], 1)
+        self.assertEqual(status["todo"]["meal"], 0)
+        self.assertLessEqual(out.count("端上餐食"), status["rooms"]["cap"])
+
     def test_advice_respects_energy_and_standard_care_prioritizes_complaints(self):
         hotel_game.new_game("energy-seed")
         hotel_game._GAME["energy"] = 3
@@ -87,6 +105,22 @@ class HotelGameTests(unittest.TestCase):
         self.assertNotIn("可以直接说：照顾 全部", advice)
         out = hotel_game.cmd("照顾 全部")
         self.assertLess(out.find("【客诉】"), out.find("【餐食】"))
+
+    def test_revenue_strategy_commands_and_promise_settlement(self):
+        hotel_game.new_game("regular-seed")
+        set_plan = hotel_game.cmd("定价 溢价; 承诺 温泉")
+        status = status_from(set_plan)
+        self.assertEqual(status["rate"], "溢价")
+        self.assertEqual(status["promise"], "温泉")
+        revenue = hotel_game.cmd("收益")
+        self.assertIn("今日收益策略：定价《溢价》，承诺《温泉》", revenue)
+        out = hotel_game.cmd("照顾 全部; 结束一天")
+        self.assertIn("承诺《温泉》兑现", out)
+        self.assertIn("其中房费", out)
+
+    def test_ledger_reminder_reaches_advice(self):
+        out = hotel_game.cmd("账本提醒")
+        self.assertIn("今日计划", out)
 
     def test_advice_named_save_and_backup(self):
         advice = hotel_game.cmd("建议")
@@ -158,6 +192,9 @@ class HotelGameTests(unittest.TestCase):
             hotel_game.cmd("结束一天")
         out = hotel_game.cmd("结束一天")
         self.assertIn("年度总结：第1年结束", out)
+        self.assertIn("OCC", out)
+        self.assertIn("ADR", out)
+        self.assertIn("RevPAR", out)
         status = status_from(out)
         self.assertEqual(status["year"], 2)
         self.assertEqual(status["season"], "春")

@@ -792,10 +792,71 @@ _GARDEN_INSPIRATIONS = [
     },
 ]
 
+_RATE_PLANS = {
+    "budget": {
+        "name": "亲民",
+        "aliases": ["亲民", "便宜", "低价", "budget"],
+        "room_delta": -3,
+        "mood": 1,
+        "refund_risk": -1,
+        "line": "门槛低，客人更宽容，但房费少一点。",
+    },
+    "standard": {
+        "name": "标准",
+        "aliases": ["标准", "普通", "standard"],
+        "room_delta": 0,
+        "mood": 0,
+        "refund_risk": 0,
+        "line": "价格和期待都稳稳落在中间。",
+    },
+    "premium": {
+        "name": "溢价",
+        "aliases": ["溢价", "高价", "高级", "premium"],
+        "room_delta": 5,
+        "mood": -1,
+        "refund_risk": 2,
+        "line": "房费更高，客人也更在意承诺是否兑现。",
+    },
+}
+_RATE_ALIASES = {
+    alias: key for key, spec in _RATE_PLANS.items() for alias in spec["aliases"]
+}
+
+_PROMISES = {
+    "balanced": {
+        "name": "均衡",
+        "aliases": ["均衡", "平衡", "默认", "balanced"],
+        "line": "不额外许诺，把今天的基础照顾做好。",
+    },
+    "quiet": {
+        "name": "安静",
+        "aliases": ["安静", "静谧", "quiet"],
+        "line": "承诺让房间和走廊安稳下来，适合风声小、客诉少的日子。",
+    },
+    "meal": {
+        "name": "餐食",
+        "aliases": ["餐食", "美食", "饭", "meal"],
+        "line": "承诺用餐食承接房价，适合食材充足、厨房有余裕的日子。",
+    },
+    "bath": {
+        "name": "温泉",
+        "aliases": ["温泉", "泡汤", "汤", "bath", "onsen"],
+        "line": "承诺把温泉照顾到位，适合柴火充足、雨雪旅人多的日子。",
+    },
+    "concierge": {
+        "name": "礼宾",
+        "aliases": ["礼宾", "前厅", "招呼", "concierge"],
+        "line": "承诺把客诉、问候和抵达感接住，适合需要多听人说话的日子。",
+    },
+}
+_PROMISE_ALIASES = {
+    alias: key for key, spec in _PROMISES.items() for alias in spec["aliases"]
+}
+
 _HELP_TEXT = (
     "可说：去 前厅/客房/厨房/温泉/庭院/商店；客人；安排 全部；"
     + "照顾 全部；做饭 1；温泉 全部；客诉 全部；备料；拾柴；打扫；招呼；"
-    + "买 食材 3；升级 厨房；建议；保存为 一周目；读档 一周目；"
+    + "定价 标准；承诺 温泉；收益；买 食材 3；升级 厨房；建议；保存为 一周目；读档 一周目；"
     + "存档列表；备份存档；图鉴；状态；年度总结；结束一天。"
     + "可用分号、换行或“然后”输入批量指令。"
 )
@@ -850,6 +911,8 @@ def _fresh_game(seed: Any) -> dict[str, Any]:
         "money": 44,
         "food": 7,
         "wood": 6,
+        "rate_plan": "standard",
+        "promise": "balanced",
         "energy": 6,
         "max_energy": 6,
         "clock": 0,
@@ -860,6 +923,7 @@ def _fresh_game(seed: Any) -> dict[str, Any]:
         "regular_seq": 0,
         "regulars": [],
         "staff": _new_staff_state(),
+        "day_actions": {},
         "today_event": "",
         "garden_seen_day": 0,
         "inspiration": {"day": 0, "target": "", "name": "", "uses": 0},
@@ -1054,6 +1118,9 @@ def _migrate(game: dict[str, Any]) -> dict[str, Any]:
     game.setdefault("staff", _new_staff_state())
     for key, value in _new_staff_state().items():
         game["staff"].setdefault(key, value)
+    game.setdefault("rate_plan", "standard")
+    game.setdefault("promise", "balanced")
+    game.setdefault("day_actions", {})
     game.setdefault("today_event", "")
     game.setdefault("garden_seen_day", 0)
     game.setdefault("inspiration", {"day": 0, "target": "", "name": "", "uses": 0})
@@ -1126,6 +1193,12 @@ def _new_annual_stats() -> dict[str, Any]:
         "food_gained": 0,
         "wood_gained": 0,
         "wood_used": 0,
+        "available_room_nights": 0,
+        "sold_room_nights": 0,
+        "room_revenue": 0,
+        "ancillary_revenue": 0,
+        "promise_kept": 0,
+        "promise_missed": 0,
         "actions": {
             "rooms": 0,
             "meals": 0,
@@ -1165,6 +1238,8 @@ def _annual(game: dict[str, Any]) -> dict[str, Any]:
 def _record_action(game: dict[str, Any], key: str, amount: int = 1) -> None:
     stats = _annual(game)
     stats["actions"][key] = int(stats["actions"].get(key, 0)) + amount
+    day_actions = game.setdefault("day_actions", {})
+    day_actions[key] = int(day_actions.get(key, 0)) + amount
 
 
 def _staff_memory(game: dict[str, Any], action: str) -> str:
@@ -1332,6 +1407,9 @@ def _start_day(game: dict[str, Any]) -> str:
     game["today_event"] = ""
     game["garden_seen_day"] = 0
     game["inspiration"] = {"day": game["day"], "target": "", "name": "", "uses": 0}
+    game["rate_plan"] = "standard"
+    game["promise"] = "balanced"
+    game["day_actions"] = {}
     game["clock"] = 0
     game["max_energy"] = 6 + min(2, int(game["upgrades"]["garden"]))
     game["energy"] = game["max_energy"]
@@ -1341,6 +1419,7 @@ def _start_day(game: dict[str, Any]) -> str:
     stats = _annual(game)
     stats["days"] += 1
     stats["guests"] += len(game["guests"])
+    stats["available_room_nights"] += _room_capacity(game)
     stats["season_days"][season["id"]] += 1
     lines = [
         "{}，{}，天气：{}。{}".format(_date_text(game["day"]), _time_label(game), weather["name"], weather["line"]),
@@ -1493,6 +1572,28 @@ def _room_used(game: dict[str, Any]) -> int:
     return sum(1 for guest in game["guests"] if guest["room"])
 
 
+def _service_candidates(game: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = [guest for guest in game["guests"] if guest["room"]]
+    slots = max(0, _room_capacity(game) - len(candidates))
+    for guest in game["guests"]:
+        if slots <= 0:
+            break
+        if not guest["room"]:
+            candidates.append(guest)
+            slots -= 1
+    return candidates
+
+
+def _todo(game: dict[str, Any]) -> dict[str, int]:
+    candidates = _service_candidates(game)
+    return {
+        "room": sum(1 for guest in game["guests"] if not guest["room"]),
+        "meal": sum(1 for guest in candidates if not guest["meal"]),
+        "bath": sum(1 for guest in candidates if guest["wants_bath"] and not guest["bath"]),
+        "complaint": sum(1 for guest in game["guests"] if guest["complaint"]),
+    }
+
+
 def _finish(lines: list[str], game: dict[str, Any]) -> str:
     clean_lines = [line for line in lines if line]
     clean_lines.append(_status_line(game))
@@ -1500,12 +1601,7 @@ def _finish(lines: list[str], game: dict[str, Any]) -> str:
 
 
 def _status_line(game: dict[str, Any]) -> str:
-    todo = {
-        "room": sum(1 for guest in game["guests"] if not guest["room"]),
-        "meal": sum(1 for guest in game["guests"] if not guest["meal"]),
-        "bath": sum(1 for guest in game["guests"] if guest["wants_bath"] and not guest["bath"]),
-        "complaint": sum(1 for guest in game["guests"] if guest["complaint"]),
-    }
+    todo = _todo(game)
     status = {
         "day": game["day"],
         "year": _year_for_day(game["day"]),
@@ -1516,11 +1612,14 @@ def _status_line(game: dict[str, Any]) -> str:
         "weather": _weather(game)["name"],
         "event": _today_event(game)["title"] if _today_event(game) else "",
         "inspiration": _active_inspiration(game),
+        "rate": _rate_plan(game)["name"],
+        "promise": _promise(game)["name"],
         "money": game["money"],
         "food": game["food"],
         "wood": game["wood"],
         "energy": game["energy"],
         "guests": len(game["guests"]),
+        "rooms": {"used": _room_used(game), "cap": _room_capacity(game)},
         "todo": todo,
         "memory": game["memory"],
         "codex": len(game["codex"]),
@@ -1541,10 +1640,16 @@ def _handle_command(game: dict[str, Any], raw: str) -> str:
         return _brief_status(game)
     if _has(text, ["帮助", "help", "?"]):
         return _HELP_TEXT
-    if _has(text, ["状态", "账本", "旅馆", "status", "look"]):
-        return _brief_status(game)
     if _has(text, ["建议", "今日计划", "账本提醒", "advice", "plan"]):
         return _advice(game)
+    if _has(text, ["状态", "账本", "旅馆", "status", "look"]):
+        return _brief_status(game)
+    if _has(text, ["收益", "营收", "revenue"]):
+        return _revenue_status(game)
+    if _has(text, ["定价", "房价", "rate"]):
+        return _set_rate(game, text)
+    if _has(text, ["承诺", "主推", "promise"]):
+        return _set_promise(game, text)
     if _starts_move(text):
         return _move(game, text)
     if _has(text, ["客人", "名单", "住客", "guest", "guests", "list"]):
@@ -1647,6 +1752,28 @@ def _weather(game: dict[str, Any]) -> dict[str, Any]:
     return _WEATHERS[0]
 
 
+def _rate_plan(game: dict[str, Any]) -> dict[str, Any]:
+    return _RATE_PLANS.get(str(game.get("rate_plan", "standard")), _RATE_PLANS["standard"])
+
+
+def _promise(game: dict[str, Any]) -> dict[str, Any]:
+    return _PROMISES.get(str(game.get("promise", "balanced")), _PROMISES["balanced"])
+
+
+def _find_rate(text: str) -> str | None:
+    for alias, key in sorted(_RATE_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if alias in text:
+            return key
+    return None
+
+
+def _find_promise(text: str) -> str | None:
+    for alias, key in sorted(_PROMISE_ALIASES.items(), key=lambda item: len(item[0]), reverse=True):
+        if alias in text:
+            return key
+    return None
+
+
 def _today_event(game: dict[str, Any]) -> dict[str, Any] | None:
     event_id = game.get("today_event", "")
     for event in _DAY_EVENTS:
@@ -1682,7 +1809,7 @@ def _brief_status(game: dict[str, Any]) -> str:
     return (
         (
             "{}，{}，{}{}，你在{}。钱{}，食材{}，柴火{}，体力{}/{}，客人{}位，"
-            + "房间{}/{}，记忆{}，图鉴{}{}。{}"
+            + "房间{}/{}，定价{}，承诺{}，记忆{}，图鉴{}{}。{}"
         ).format(
             _date_text(game["day"]),
             _time_label(game),
@@ -1697,6 +1824,8 @@ def _brief_status(game: dict[str, Any]) -> str:
             len(game["guests"]),
             _room_used(game),
             _room_capacity(game),
+            _rate_plan(game)["name"],
+            _promise(game)["name"],
             game["memory"],
             len(game["codex"]),
             inspiration_text,
@@ -1705,21 +1834,65 @@ def _brief_status(game: dict[str, Any]) -> str:
     )
 
 
+def _set_rate(game: dict[str, Any], text: str) -> str:
+    key = _find_rate(text)
+    if key is None:
+        return "可选定价：亲民、标准、溢价。例：定价 溢价。"
+    game["rate_plan"] = key
+    spec = _rate_plan(game)
+    return "今日定价改为《{}》。{}".format(spec["name"], spec["line"])
+
+
+def _set_promise(game: dict[str, Any], text: str) -> str:
+    key = _find_promise(text)
+    if key is None:
+        return "可选承诺：均衡、安静、餐食、温泉、礼宾。例：承诺 温泉。"
+    game["promise"] = key
+    spec = _promise(game)
+    return "今日承诺改为《{}》。{}".format(spec["name"], spec["line"])
+
+
+def _revenue_status(game: dict[str, Any]) -> str:
+    rate = _rate_plan(game)
+    promise = _promise(game)
+    todo = _todo(game)
+    lines = [
+        "今日收益策略：定价《{}》，承诺《{}》。".format(rate["name"], promise["name"]),
+        "定价：{}".format(rate["line"]),
+        "承诺：{}".format(promise["line"]),
+    ]
+    if rate["room_delta"] > 0 and promise["name"] == "均衡":
+        lines.append("风险：溢价最好配一个明确承诺，否则客人会更挑剔。")
+    if promise["name"] == "餐食" and game["food"] < todo["meal"]:
+        lines.append("风险：餐食承诺需要{}份，当前食材{}份。".format(todo["meal"], game["food"]))
+    if promise["name"] == "温泉":
+        estimated_wood = todo["bath"]
+        if game["weather"] == "snow" and int(game["upgrades"]["onsen"]) == 0:
+            estimated_wood += todo["bath"]
+        estimated_wood = max(0, estimated_wood + int(_event_value(game, "bath_wood", 0)) * todo["bath"])
+        if game["wood"] < estimated_wood:
+            lines.append("风险：温泉承诺预计要{}捆柴，当前{}捆。".format(estimated_wood, game["wood"]))
+    if promise["name"] == "礼宾" and not (todo["complaint"] or game["guests"]):
+        lines.append("提醒：礼宾承诺最好安排一次招呼，别让前厅只剩柜铃。")
+    if promise["name"] == "安静" and game["flags"].get("check_windows"):
+        lines.append("风险：昨夜窗扣还没检查，安静承诺容易被风声打折。")
+    lines.append("价格不是惩罚或善良，是你对今天 hospitality 的信心。")
+    return "\n".join(lines)
+
+
 def _advice(game: dict[str, Any]) -> str:
-    todo = {
-        "room": sum(1 for guest in game["guests"] if not guest["room"]),
-        "meal": sum(1 for guest in game["guests"] if not guest["meal"]),
-        "bath": sum(1 for guest in game["guests"] if guest["wants_bath"] and not guest["bath"]),
-        "complaint": sum(1 for guest in game["guests"] if guest["complaint"]),
-    }
+    todo = _todo(game)
     lines = ["今日计划：{}".format(_date_text(game["day"]))]
-    need_energy = todo["room"] + todo["meal"] + todo["bath"] + todo["complaint"]
+    room_actions = min(todo["room"], max(0, _room_capacity(game) - _room_used(game)))
+    need_energy = room_actions + todo["meal"] + todo["bath"] + todo["complaint"]
     estimated_wood = todo["bath"]
     if todo["bath"] and game["weather"] == "snow" and int(game["upgrades"]["onsen"]) == 0:
         estimated_wood += todo["bath"]
     estimated_wood = max(0, estimated_wood + int(_event_value(game, "bath_wood", 0)) * todo["bath"])
     if todo["room"]:
         lines.append("先去客房安排房间；还有{}位客人的钥匙牌没交出去。".format(todo["room"]))
+        if len(game["guests"]) > _room_capacity(game):
+            lines.append("今天房间不够：客人{}位，房间{}间。照顾 全部也无法让所有人入住，优先安排能住下的人。".format(len(game["guests"]), _room_capacity(game)))
     if todo["complaint"]:
         lines.append("前厅有{}件客诉，越早听完，夜里账本越轻。".format(todo["complaint"]))
     if game["flags"].get("check_windows"):
@@ -1960,9 +2133,12 @@ def _serve_meals(game: dict[str, Any], text: str) -> str:
     need = _need_location(game, "kitchen")
     if need:
         return need
-    guests = _select_guests(game, text, lambda guest: not guest["meal"])
+    guests = _select_guests(game, text, lambda guest: guest["room"] and not guest["meal"])
     if not guests:
-        return "没有还等餐食的客人。"
+        waiting = sum(1 for guest in game["guests"] if not guest["room"] and not guest["meal"])
+        if waiting:
+            return "默认只给已安排房间的住客上餐；还有{}位客人没拿到钥匙牌。".format(waiting)
+        return "已入住的客人都吃过了。"
     lines = []
     kitchen = int(game["upgrades"]["kitchen"])
     served = 0
@@ -2000,9 +2176,20 @@ def _serve_bath(game: dict[str, Any], text: str) -> str:
     need = _need_location(game, "onsen")
     if need:
         return need
-    guests = _select_guests(game, text, lambda guest: not guest["bath"] and guest["wants_bath"])
+    guests = _select_guests(
+        game,
+        text,
+        lambda guest: guest["room"] and not guest["bath"] and guest["wants_bath"],
+    )
     if not guests:
-        return "没有特别想泡温泉的客人。"
+        waiting = sum(
+            1
+            for guest in game["guests"]
+            if not guest["room"] and not guest["bath"] and guest["wants_bath"]
+        )
+        if waiting:
+            return "默认只给已安排房间的住客备温泉；还有{}位想泡汤的客人没拿到钥匙牌。".format(waiting)
+        return "已入住的客人里，没有特别想泡温泉的人。"
     lines = []
     onsen = int(game["upgrades"]["onsen"])
     served = 0
@@ -2262,9 +2449,16 @@ def _maybe_year_summary(game: dict[str, Any]) -> str:
 
 def _annual_numbers(stats: dict[str, Any]) -> str:
     actions = stats["actions"]
+    available = max(1, int(stats.get("available_room_nights", 0)))
+    sold = int(stats.get("sold_room_nights", 0))
+    room_revenue = int(stats.get("room_revenue", 0))
+    occ = sold * 100.0 / available
+    adr = room_revenue / max(1, sold)
+    revpar = room_revenue / available
     return (
         (
             "年内记录：接待{}位，留宿{}位，收入{}钱，支出{}钱，记忆+{}，图鉴+{}；"
+            + "经营：OCC {:.1f}%，ADR {:.1f}，RevPAR {:.1f}，承诺兑现{}次、落空{}次；"
             + "照顾：房{}、饭{}、汤{}、客诉{}、打扫{}、招呼{}；"
             + "后勤：备料{}、拾柴{}、购物{}、升级{}；疏漏：房{}、饭{}、汤{}、客诉{}。"
         )
@@ -2275,6 +2469,11 @@ def _annual_numbers(stats: dict[str, Any]) -> str:
         stats["spent"],
         stats["memory"],
         stats["codex"],
+        occ,
+        adr,
+        revpar,
+        stats.get("promise_kept", 0),
+        stats.get("promise_missed", 0),
         actions["rooms"],
         actions["meals"],
         actions["baths"],
@@ -2388,6 +2587,66 @@ def _remember_regular(game: dict[str, Any], guest: dict[str, Any]) -> str:
     return ""
 
 
+def _settle_promise(game: dict[str, Any], guest: dict[str, Any], rate: dict[str, Any]) -> dict[str, int]:
+    key = str(game.get("promise", "balanced"))
+    if key == "balanced":
+        return {"bonus": 0, "refund": 0, "kept": 0, "missed": 0}
+    mood = 0
+    bonus = 0
+    refund = 0
+    kept = 0
+    missed = 0
+    if key == "meal":
+        if guest["meal"]:
+            mood = 2
+            bonus = 2
+            kept = 1
+        else:
+            mood = -3
+            refund = 4
+            missed = 1
+    elif key == "bath":
+        if guest["wants_bath"]:
+            if guest["bath"]:
+                mood = 2
+                bonus = 2
+                kept = 1
+            else:
+                mood = -3
+                refund = 4
+                missed = 1
+        elif guest["bath"]:
+            mood = 1
+            bonus = 1
+            kept = 1
+    elif key == "quiet":
+        if not guest["complaint"] and not game["flags"].get("check_windows"):
+            mood = 1
+            kept = 1
+        else:
+            mood = -2
+            refund = 2
+            missed = 1
+    elif key == "concierge":
+        day_actions = game.get("day_actions", {})
+        had_contact = int(day_actions.get("greet", 0)) > 0 or int(day_actions.get("complaints", 0)) > 0
+        if guest["complaint"]:
+            mood = -2
+            refund = 3
+            missed = 1
+        elif had_contact:
+            mood = 1
+            kept = 1
+        else:
+            mood = -1
+            refund = 1
+            missed = 1
+    if missed:
+        refund = max(0, refund + int(rate.get("refund_risk", 0)))
+    guest["mood"] += mood
+    return {"bonus": bonus, "refund": refund, "kept": kept, "missed": missed}
+
+
 def _end_day(game: dict[str, Any]) -> str:
     if not game["guests"]:
         return _start_day(game)
@@ -2399,13 +2658,19 @@ def _end_day(game: dict[str, Any]) -> str:
                 len(unassigned)
             )
         )
+    rate = _rate_plan(game)
+    promise = _promise(game)
     income = 0
+    room_income = 0
+    ancillary_income = 0
     memory_gain = 0
     unresolved = 0
     served_today = 0
     missed_rooms = 0
     missed_meals = 0
     missed_baths = 0
+    promise_kept = 0
+    promise_missed = 0
     for guest in game["guests"]:
         trait = _trait(guest)
         if not guest["room"]:
@@ -2414,24 +2679,32 @@ def _end_day(game: dict[str, Any]) -> str:
             lines.append("{}没有住下，只在门口点了点头。".format(guest["name"]))
             continue
         served_today += 1
-        guest_income = int(guest["pay"])
+        guest["mood"] += int(rate.get("mood", 0))
+        room_charge = max(0, int(guest["pay"]) + int(rate.get("room_delta", 0)))
+        guest_room_refund = 0
+        guest_ancillary = 0
         if guest["meal"]:
-            guest_income += 4 + int(game["upgrades"]["kitchen"])
+            guest_ancillary += 4 + int(game["upgrades"]["kitchen"])
         else:
             guest["mood"] -= 1
             missed_meals += 1
         if guest["wants_bath"]:
             if guest["bath"]:
-                guest_income += 4 + int(game["upgrades"]["onsen"])
+                guest_ancillary += 4 + int(game["upgrades"]["onsen"])
             else:
                 guest["mood"] -= 1
                 missed_baths += 1
         if guest["complaint"]:
             guest["mood"] -= 2
             unresolved += 1
+        promise_result = _settle_promise(game, guest, rate)
+        guest_ancillary += promise_result["bonus"]
+        guest_room_refund += promise_result["refund"]
+        promise_kept += promise_result["kept"]
+        promise_missed += promise_result["missed"]
         if guest["mood"] >= 3:
             tip = max(0, min(8, 1 + guest["mood"] + int(trait.get("tip", 0))))
-            guest_income += tip
+            guest_ancillary += tip
             personal_memory = int(trait.get("memory", 0))
             if trait["id"] == "nostalgic":
                 personal_memory += int(_event_value(game, "memory_bonus", 0))
@@ -2442,19 +2715,27 @@ def _end_day(game: dict[str, Any]) -> str:
             else:
                 lines.append("{}离店前留下{}钱小费。{}".format(guest["name"], tip, unlocked))
         elif guest["mood"] <= -3:
-            refund = min(6, max(2, -guest["mood"]))
-            guest_income -= refund
+            refund = min(8, max(2, -guest["mood"]) + max(0, int(rate.get("refund_risk", 0))))
+            guest_room_refund += refund
             lines.append("{}走得很轻，你退了{}钱。".format(guest["name"], refund))
         regular_line = _remember_regular(game, guest)
         if regular_line:
             lines.append(regular_line)
-        income += max(0, guest_income)
+        guest_room_income = max(0, room_charge - guest_room_refund)
+        room_income += guest_room_income
+        ancillary_income += max(0, guest_ancillary)
         game["served"] += 1
+    income = room_income + ancillary_income
     game["money"] += income
     game["memory"] += memory_gain
     stats = _annual(game)
     stats["served"] += served_today
     stats["income"] += income
+    stats["sold_room_nights"] += served_today
+    stats["room_revenue"] += room_income
+    stats["ancillary_revenue"] += ancillary_income
+    stats["promise_kept"] += promise_kept
+    stats["promise_missed"] += promise_missed
     stats["memory"] += memory_gain
     stats["missed_rooms"] += missed_rooms
     stats["missed_meals"] += missed_meals
@@ -2462,7 +2743,16 @@ def _end_day(game: dict[str, Any]) -> str:
     stats["unresolved_complaints"] += unresolved
     if unresolved:
         lines.append("还有{}件客诉没完全消化，夜里账本变重了一点。".format(unresolved))
-    lines.append("今日收入{}钱，旅馆记忆+{}。".format(income, memory_gain))
+    if promise_kept or promise_missed:
+        lines.append("承诺《{}》兑现{}次，落空{}次。".format(promise["name"], promise_kept, promise_missed))
+    lines.append(
+        "今日收入{}钱，其中房费{}钱、体验与小费{}钱；旅馆记忆+{}。".format(
+            income,
+            room_income,
+            ancillary_income,
+            memory_gain,
+        )
+    )
     weather_line = _night_weather(game)
     if weather_line:
         lines.append(weather_line)
