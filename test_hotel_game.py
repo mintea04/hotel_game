@@ -69,6 +69,28 @@ class HotelGameTests(unittest.TestCase):
         out = hotel_game.cmd("去 厨房; 做饭 全部; 结束一天")
         self.assertIn("未安排房间的客人不会入住", out)
 
+    def test_advice_named_save_and_backup(self):
+        advice = hotel_game.cmd("建议")
+        self.assertIn("今日计划", advice)
+        saved = hotel_game.cmd("保存为 一周目")
+        self.assertIn("已保存命名存档《一周目》", saved)
+        hotel_game.cmd("结束一天")
+        loaded = hotel_game.cmd("读档 一周目")
+        self.assertIn("已先备份当前进度", loaded)
+        self.assertEqual(status_from(loaded)["day"], 1)
+        listing = hotel_game.cmd("存档列表")
+        self.assertIn("一周目", listing)
+        backup = hotel_game.cmd("备份存档")
+        self.assertIn("已备份当前进度", backup)
+
+    def test_staff_and_regular_memory_lines(self):
+        hotel_game.new_game("staff-seed")
+        staff = hotel_game.cmd("去 厨房; 备料; 备料; 备料")
+        self.assertIn("staff记忆", staff)
+        hotel_game.new_game("regular-seed")
+        regular = hotel_game.cmd("照顾 全部; 结束一天")
+        self.assertIn("下次还想住同一间", regular)
+
     def test_time_seasons_garden_and_year_summary(self):
         start = status_from(hotel_game.cmd("状态"))
         self.assertEqual(start["season"], "春")
