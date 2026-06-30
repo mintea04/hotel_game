@@ -77,7 +77,17 @@ class HotelGameTests(unittest.TestCase):
         self.assertEqual(status["todo"]["room"], 0)
         hotel_game.new_game("warning-seed")
         out = hotel_game.cmd("去 厨房; 做饭 全部; 结束一天")
+        self.assertIn("风险提醒", out)
         self.assertIn("未安排房间的客人不会入住", out)
+
+    def test_end_day_requires_confirmation_when_risky(self):
+        hotel_game.new_game("warning-seed")
+        warned = hotel_game.cmd("结束一天")
+        self.assertIn("确认结束", warned)
+        self.assertEqual(status_from(warned)["day"], 1)
+        ended = hotel_game.cmd("确认结束")
+        self.assertIn("今日收入", ended)
+        self.assertEqual(status_from(ended)["day"], 2)
 
     def test_capacity_warning_and_services_require_room(self):
         hotel_game.new_game("staff-seed")
@@ -106,6 +116,15 @@ class HotelGameTests(unittest.TestCase):
         out = hotel_game.cmd("照顾 全部")
         self.assertLess(out.find("【客诉】"), out.find("【餐食】"))
 
+    def test_advice_recommends_rate_and_promise_from_public_state(self):
+        hotel_game.new_game("regular-seed")
+        bath_day = hotel_game.cmd("建议")
+        self.assertIn("建议策略：可说“定价 溢价；承诺 温泉”", bath_day)
+        hotel_game.new_game("staff-seed")
+        tight_day = hotel_game.cmd("建议")
+        self.assertIn("建议策略：可说“定价 亲民；承诺 礼宾”", tight_day)
+        self.assertIn("固定维护", tight_day)
+
     def test_revenue_strategy_commands_and_promise_settlement(self):
         hotel_game.new_game("regular-seed")
         set_plan = hotel_game.cmd("定价 溢价; 承诺 温泉")
@@ -117,6 +136,33 @@ class HotelGameTests(unittest.TestCase):
         out = hotel_game.cmd("照顾 全部; 结束一天")
         self.assertIn("承诺《温泉》兑现", out)
         self.assertIn("其中房费", out)
+
+    def test_rate_carries_into_next_day_arrivals(self):
+        hotel_game.new_game("rate-seed")
+        out = hotel_game.cmd("定价 溢价; 确认结束")
+        self.assertIn("挂牌价是《溢价》", out)
+        self.assertEqual(status_from(out)["rate"], "溢价")
+
+    def test_fixed_costs_include_weekly_linen(self):
+        hotel_game.new_game("linen-seed")
+        hotel_game._GAME["day"] = 7
+        out = hotel_game.cmd("确认结束")
+        self.assertIn("灯油与洗涤", out)
+        self.assertIn("布草维护", out)
+
+    def test_clear_actions_auto_move_and_meals_have_seasonal_menu(self):
+        hotel_game.new_game("test-seed")
+        out = hotel_game.cmd("安排 全部; 做饭 全部")
+        status = status_from(out)
+        self.assertEqual(status["loc"], "厨房")
+        self.assertIn("端上餐食《", out)
+
+    def test_garden_moment_explains_inspiration_effect(self):
+        hotel_game.new_game("garden-0")
+        out = hotel_game.cmd("去 庭院")
+        self.assertIn("庭院小记", out)
+        self.assertIn("效果很明确", out)
+        self.assertIn("可说：做饭 全部", out)
 
     def test_ledger_reminder_reaches_advice(self):
         out = hotel_game.cmd("账本提醒")
@@ -189,8 +235,8 @@ class HotelGameTests(unittest.TestCase):
         garden = hotel_game.cmd("去 庭院")
         self.assertIn("庭院小记", garden)
         for _ in range(27):
-            hotel_game.cmd("结束一天")
-        out = hotel_game.cmd("结束一天")
+            hotel_game.cmd("确认结束")
+        out = hotel_game.cmd("确认结束")
         self.assertIn("年度总结：第1年结束", out)
         self.assertIn("OCC", out)
         self.assertIn("ADR", out)
