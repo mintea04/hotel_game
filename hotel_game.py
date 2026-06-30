@@ -867,7 +867,7 @@ def _fresh_game(seed: Any) -> dict[str, Any]:
         "year_reports": [],
         "codex": [],
         "upgrades": {"rooms": 0, "kitchen": 0, "onsen": 0, "garden": 0, "sign": 0},
-        "flags": {"ending_seen": False},
+        "flags": {"ending_seen": False, "check_windows": False},
     }
 
 
@@ -1061,6 +1061,7 @@ def _migrate(game: dict[str, Any]) -> dict[str, Any]:
     game.setdefault("year_reports", [])
     _annual(game)
     game.setdefault("flags", {})
+    game["flags"].setdefault("check_windows", False)
     game.setdefault("upgrades", {"rooms": 0, "kitchen": 0, "onsen": 0, "garden": 0, "sign": 0})
     for key in _UPGRADES:
         game["upgrades"].setdefault(key, 0)
@@ -1530,7 +1531,7 @@ def _status_line(game: dict[str, Any]) -> str:
 
 def _split_commands(text: str) -> list[str]:
     text = text.replace("\r\n", "\n").replace("；", ";").replace("\n", ";")
-    text = text.replace("然后", ";").replace("再然后", ";")
+    text = text.replace("再然后", ";").replace("然后", ";")
     return [part.strip() for part in text.split(";") if part.strip()]
 
 
@@ -1712,20 +1713,23 @@ def _advice(game: dict[str, Any]) -> str:
         "complaint": sum(1 for guest in game["guests"] if guest["complaint"]),
     }
     lines = ["今日计划：{}".format(_date_text(game["day"]))]
+    need_energy = todo["room"] + todo["meal"] + todo["bath"] + todo["complaint"]
+    estimated_wood = todo["bath"]
+    if todo["bath"] and game["weather"] == "snow" and int(game["upgrades"]["onsen"]) == 0:
+        estimated_wood += todo["bath"]
+    estimated_wood = max(0, estimated_wood + int(_event_value(game, "bath_wood", 0)) * todo["bath"])
     if todo["room"]:
         lines.append("先去客房安排房间；还有{}位客人的钥匙牌没交出去。".format(todo["room"]))
     if todo["complaint"]:
         lines.append("前厅有{}件客诉，越早听完，夜里账本越轻。".format(todo["complaint"]))
+    if game["flags"].get("check_windows"):
+        lines.append("昨夜风大，建议去客房打扫/检查窗扣；处理后可让今天少一点悬着的心。")
     if todo["meal"]:
         if game["food"] < todo["meal"]:
             lines.append("食材不足：还差{}份，先去厨房备料或去商店购买。".format(todo["meal"] - game["food"]))
         else:
             lines.append("餐食待办{}份，厨房现在能支撑。".format(todo["meal"]))
     if todo["bath"]:
-        estimated_wood = todo["bath"]
-        if game["weather"] == "snow" and int(game["upgrades"]["onsen"]) == 0:
-            estimated_wood += todo["bath"]
-        estimated_wood = max(0, estimated_wood + int(_event_value(game, "bath_wood", 0)) * todo["bath"])
         if game["wood"] < estimated_wood:
             lines.append("温泉可能缺柴：预计要{}捆，现有{}捆，可先去庭院拾柴。".format(estimated_wood, game["wood"]))
         else:
@@ -1740,7 +1744,14 @@ def _advice(game: dict[str, Any]) -> str:
         lines.append("今日小事是《{}》，可以按公开效果调整路线。".format(event["title"]))
     if not any(todo.values()):
         lines.append("主线待办已经清空，可以打扫、招呼、去庭院，或结束一天。")
-    elif game["food"] >= todo["meal"] and game["wood"] >= todo["bath"] and game["energy"] >= max(1, todo["room"] + todo["meal"]):
+    elif game["energy"] < need_energy:
+        lines.append(
+            "体力不够照顾全部：预计要{}点，现有{}点。建议先安排房间，再处理客诉，之后看资源决定餐食或温泉。".format(
+                need_energy,
+                game["energy"],
+            )
+        )
+    elif game["food"] >= todo["meal"] and game["wood"] >= estimated_wood:
         lines.append("想稳妥推进，可以直接说：照顾 全部。")
     return "\n".join(lines)
 
@@ -1900,11 +1911,11 @@ def _standard_care(game: dict[str, Any], text: str) -> str:
     scope = "全部" if _has(text, ["全部", "所有", "all", "大家"]) else "全部"
     steps = [
         ("rooms", "房间", _assign_rooms, "安排 {}".format(scope)),
+        ("front", "客诉", _handle_complaints, "客诉 {}".format(scope)),
         ("kitchen", "餐食", _serve_meals, "做饭 {}".format(scope)),
         ("onsen", "温泉", _serve_bath, "温泉 {}".format(scope)),
-        ("front", "客诉", _handle_complaints, "客诉 {}".format(scope)),
     ]
-    lines = ["标准接待开始：按房间→餐食→温泉→客诉照顾。"]
+    lines = ["标准接待开始：你按流程依次去了客房、前厅、厨房和汤屋；体力不足时优先房间和客诉。"]
     for location, label, action, command_text in steps:
         game["location"] = location
         result = action(game, command_text)
@@ -2108,6 +2119,12 @@ def _clean_rooms(game: dict[str, Any]) -> str:
         return "体力用尽，抹布被你搭在门把上。"
     _spend_energy(game)
     _record_action(game, "clean")
+    window_line = ""
+    if game["flags"].get("check_windows"):
+        game["flags"]["check_windows"] = False
+        game["memory"] += 1
+        _annual(game)["memory"] += 1
+        window_line = "你顺手检查了昨夜被风吹响的窗扣，走廊安静下来。记忆+1。"
     helped = 0
     extra = 0
     for guest in game["guests"]:
@@ -2119,9 +2136,12 @@ def _clean_rooms(game: dict[str, Any]) -> str:
                 extra += 1
     if helped == 0:
         staff = _staff_memory(game, "clean")
+        lines = ["你把空房打扫干净。今晚若有人入住，会少一点灰尘。"]
+        if window_line:
+            lines.append(window_line)
         if staff:
-            return "你把空房打扫干净。今晚若有人入住，会少一点灰尘。\n{}".format(staff)
-        return "你把空房打扫干净。今晚若有人入住，会少一点灰尘。"
+            lines.append(staff)
+        return "\n".join(lines)
     staff = _staff_memory(game, "clean")
     rare = _maybe_rare(game, "rooms")
     if rare:
@@ -2131,10 +2151,14 @@ def _clean_rooms(game: dict[str, Any]) -> str:
         ]
         if extra:
             lines[0] = "你打扫了走廊和房间，{}位客人心情+1，其中{}位特别受用。".format(helped, extra)
+        if window_line:
+            lines.insert(1, window_line)
         if staff:
             lines.insert(1, staff)
         return "\n".join(lines)
     base = "你打扫了走廊和房间，{}位客人心情+1，其中{}位特别受用。".format(helped, extra) if extra else "你打扫了走廊和房间，{}位客人的心情各+1。".format(helped)
+    if window_line:
+        base = "{}\n{}".format(base, window_line)
     if staff:
         return "{}\n{}".format(base, staff)
     return base
@@ -2320,8 +2344,6 @@ def _annual_garden_note(stats: dict[str, Any]) -> str:
 
 
 def _remember_regular(game: dict[str, Any], guest: dict[str, Any]) -> str:
-    if int(guest.get("mood", 0)) < 3:
-        return ""
     regulars = game.setdefault("regulars", [])
     key = guest.get("regular_key", "")
     record = None
@@ -2330,6 +2352,9 @@ def _remember_regular(game: dict[str, Any], guest: dict[str, Any]) -> str:
             record = item
             break
     first_time = False
+    mood = int(guest.get("mood", 0))
+    if record is None and mood < 3:
+        return ""
     if record is None:
         game["regular_seq"] = int(game.get("regular_seq", 0)) + 1
         key = "r{}".format(game["regular_seq"])
@@ -2345,10 +2370,15 @@ def _remember_regular(game: dict[str, Any], guest: dict[str, Any]) -> str:
         regulars.append(record)
         first_time = True
     record["visits"] = int(record.get("visits", 0)) + 1
-    record["affinity"] = int(record.get("affinity", 0)) + max(1, int(guest.get("mood", 0)))
+    if mood >= 3:
+        record["affinity"] = int(record.get("affinity", 0)) + max(1, mood)
+    else:
+        record["affinity"] = max(0, int(record.get("affinity", 0)) - 1)
     record["last_seen"] = int(game["day"])
     guest["regular_key"] = key
-    if first_time and int(guest.get("mood", 0)) >= 5:
+    if mood < 3:
+        return "{}这次没有多说，只把钥匙牌轻轻放回柜台。".format(guest["name"])
+    if first_time and mood >= 5:
         return "{}离店时回头看了一眼，说下次还想住同一间。".format(guest["name"])
     if not first_time and int(record["visits"]) == 2:
         unlock = _unlock(game, "returning_card")
@@ -2462,6 +2492,7 @@ def _night_weather(game: dict[str, Any]) -> str:
         for guest in game["guests"]:
             if guest["room"] and _chance(game, 35):
                 guest["complaint"] = True
+        game["flags"]["check_windows"] = True
         return "风把几扇窗吹得发响，你在账本旁记下：明天先查窗扣。"
     if weather_id == "fog" and _chance(game, 25):
         game["memory"] += 1

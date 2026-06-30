@@ -52,6 +52,13 @@ class HotelGameTests(unittest.TestCase):
         self.assertEqual(status["loc"], "厨房")
         self.assertLessEqual(status["todo"]["room"], status["guests"])
 
+    def test_batch_rethen_does_not_create_extra_command(self):
+        out = hotel_game.cmd("状态 再然后 状态")
+        self.assertIn("[1]", out)
+        self.assertIn("[2]", out)
+        self.assertNotIn("[3]", out)
+        self.assertNotIn("它还不是旅馆听得懂的指令", out)
+
     def test_guest_traits_and_public_day_event_status(self):
         out = hotel_game.cmd("客人")
         status = status_from(out)
@@ -68,6 +75,18 @@ class HotelGameTests(unittest.TestCase):
         hotel_game.new_game("warning-seed")
         out = hotel_game.cmd("去 厨房; 做饭 全部; 结束一天")
         self.assertIn("未安排房间的客人不会入住", out)
+
+    def test_advice_respects_energy_and_standard_care_prioritizes_complaints(self):
+        hotel_game.new_game("energy-seed")
+        hotel_game._GAME["energy"] = 3
+        for guest in hotel_game._GAME["guests"]:
+            guest["complaint"] = True
+            guest["wants_bath"] = True
+        advice = hotel_game.cmd("建议")
+        self.assertIn("体力不够照顾全部", advice)
+        self.assertNotIn("可以直接说：照顾 全部", advice)
+        out = hotel_game.cmd("照顾 全部")
+        self.assertLess(out.find("【客诉】"), out.find("【餐食】"))
 
     def test_advice_named_save_and_backup(self):
         advice = hotel_game.cmd("建议")
@@ -90,6 +109,42 @@ class HotelGameTests(unittest.TestCase):
         hotel_game.new_game("regular-seed")
         regular = hotel_game.cmd("照顾 全部; 结束一天")
         self.assertIn("下次还想住同一间", regular)
+
+    def test_returning_guest_updates_last_seen_even_when_unhappy(self):
+        hotel_game.new_game("regular-last-seen")
+        game = hotel_game._GAME
+        game["regulars"] = [
+            {
+                "key": "r1",
+                "name": "白灯",
+                "type": "bookkeeper",
+                "trait": "quiet",
+                "visits": 1,
+                "affinity": 5,
+                "last_seen": 0,
+            }
+        ]
+        guest = {
+            "name": "白灯",
+            "type": "bookkeeper",
+            "trait": "quiet",
+            "regular_key": "r1",
+            "mood": 0,
+        }
+        line = hotel_game._remember_regular(game, guest)
+        self.assertIn("没有多说", line)
+        self.assertEqual(game["regulars"][0]["last_seen"], game["day"])
+        self.assertEqual(game["regulars"][0]["visits"], 2)
+
+    def test_window_check_flag_is_actionable(self):
+        hotel_game.new_game("window-seed")
+        game = hotel_game._GAME
+        game["flags"]["check_windows"] = True
+        advice = hotel_game.cmd("建议")
+        self.assertIn("检查窗扣", advice)
+        out = hotel_game.cmd("去 客房; 打扫")
+        self.assertIn("窗扣", out)
+        self.assertFalse(game["flags"]["check_windows"])
 
     def test_time_seasons_garden_and_year_summary(self):
         start = status_from(hotel_game.cmd("状态"))
