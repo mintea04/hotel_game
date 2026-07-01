@@ -150,6 +150,58 @@ class HotelGameTests(unittest.TestCase):
         self.assertIn("灯油与洗涤", out)
         self.assertIn("布草维护", out)
 
+    def test_shop_daily_limit_and_escalating_price(self):
+        hotel_game.new_game("shop-seed")
+        bought = hotel_game.cmd("买 食材 4")
+        status = status_from(bought)
+        self.assertIn("买入4份食材，花18钱", bought)
+        self.assertEqual(status["shop"]["food_left"], 0)
+        blocked = hotel_game.cmd("买 食材 1")
+        self.assertIn("食材已经买完", blocked)
+        hotel_game.cmd("确认结束")
+        next_day = status_from(hotel_game.cmd("状态"))
+        self.assertEqual(next_day["shop"]["food_left"], 4)
+        hotel_game._GAME["today_event"] = ""
+        fresh_price = hotel_game.cmd("买 食材 1")
+        self.assertIn("买入1份食材，花4钱", fresh_price)
+
+    def test_manual_prep_and_wood_add_quality_bonus(self):
+        hotel_game.new_game("quality-seed")
+        meal = hotel_game.cmd("备料; 安排 全部; 做饭 1")
+        self.assertIn("下一次餐食心情+1", meal)
+        self.assertIn("亲手备料的季节味道被尝出来了", meal)
+        hotel_game.new_game("quality-seed")
+        bath = hotel_game.cmd("拾柴; 安排 全部; 温泉 全部")
+        self.assertIn("下一次温泉心情+1", bath)
+        self.assertIn("亲手挑回的柴让水汽更稳", bath)
+
+    def test_advice_understands_shop_limits_and_wind_wood(self):
+        hotel_game.new_game("limit-advice")
+        game = hotel_game._GAME
+        game["food"] = 0
+        game["wood"] = 0
+        game["shop_bought"] = {"food": 4, "wood": 3}
+        game["weather"] = "wind"
+        for guest in game["guests"]:
+            guest["wants_bath"] = True
+        advice = hotel_game.cmd("建议")
+        self.assertIn("商店食材限购已接近上限", advice)
+        self.assertIn("商店柴火限购已接近上限", advice)
+        self.assertIn("风天拾柴额外顺手", advice)
+
+    def test_personality_distinguishes_purchase_and_manual_logistics(self):
+        stats = hotel_game._new_annual_stats()
+        stats["guests"] = 8
+        stats["actions"]["buys"] = 8
+        purchase_lines = hotel_game._personality_lines(stats)
+        self.assertIn("采购型明显", "；".join(purchase_lines))
+        stats = hotel_game._new_annual_stats()
+        stats["guests"] = 8
+        stats["actions"]["prep"] = 4
+        stats["actions"]["wood"] = 4
+        manual_lines = hotel_game._personality_lines(stats)
+        self.assertIn("勤恳后勤型明显", "；".join(manual_lines))
+
     def test_clear_actions_auto_move_and_meals_have_seasonal_menu(self):
         hotel_game.new_game("test-seed")
         out = hotel_game.cmd("安排 全部; 做饭 全部")

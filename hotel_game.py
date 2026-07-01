@@ -17,6 +17,7 @@ _SAVE_NAME = "hotel_save.json"
 _GAME: dict[str, Any] | None = None
 _DAYS_PER_SEASON = 7
 _DAYS_PER_YEAR = _DAYS_PER_SEASON * 4
+_SHOP_DAILY_LIMIT = 4
 
 _TIME_SLOTS = ["清晨", "上午", "午后", "傍晚", "入夜", "深夜"]
 
@@ -992,6 +993,7 @@ def _fresh_game(seed: Any) -> dict[str, Any]:
         "regulars": [],
         "staff": _new_staff_state(),
         "day_actions": {},
+        "shop_bought": {"food": 0, "wood": 0},
         "today_event": "",
         "garden_seen_day": 0,
         "inspiration": {"day": 0, "target": "", "name": "", "uses": 0},
@@ -1190,6 +1192,10 @@ def _migrate(game: dict[str, Any]) -> dict[str, Any]:
     game.setdefault("next_rate_plan", game.get("rate_plan", "standard"))
     game.setdefault("promise", "balanced")
     game.setdefault("day_actions", {})
+    if not isinstance(game.get("shop_bought"), dict):
+        game["shop_bought"] = {"food": 0, "wood": 0}
+    game["shop_bought"].setdefault("food", 0)
+    game["shop_bought"].setdefault("wood", 0)
     game.setdefault("today_event", "")
     game.setdefault("garden_seen_day", 0)
     game.setdefault("inspiration", {"day": 0, "target": "", "name": "", "uses": 0})
@@ -1318,6 +1324,20 @@ def _record_action(game: dict[str, Any], key: str, amount: int = 1) -> None:
     stats["actions"][key] = int(stats["actions"].get(key, 0)) + amount
     day_actions = game.setdefault("day_actions", {})
     day_actions[key] = int(day_actions.get(key, 0)) + amount
+
+
+def _add_day_quality(game: dict[str, Any], key: str, amount: int = 1) -> None:
+    day_actions = game.setdefault("day_actions", {})
+    day_actions[key] = int(day_actions.get(key, 0)) + amount
+
+
+def _use_day_quality(game: dict[str, Any], key: str) -> int:
+    day_actions = game.setdefault("day_actions", {})
+    value = int(day_actions.get(key, 0))
+    if value <= 0:
+        return 0
+    day_actions[key] = value - 1
+    return 1
 
 
 def _staff_memory(game: dict[str, Any], action: str) -> str:
@@ -1521,6 +1541,7 @@ def _start_day(game: dict[str, Any]) -> str:
     game["next_rate_plan"] = arrival_rate
     game["promise"] = "balanced"
     game["day_actions"] = {}
+    game["shop_bought"] = {"food": 0, "wood": 0}
     game["clock"] = 0
     game["max_energy"] = 6 + min(2, int(game["upgrades"]["garden"]))
     game["energy"] = game["max_energy"]
@@ -1835,6 +1856,7 @@ def _status_line(game: dict[str, Any]) -> str:
         "money": game["money"],
         "food": game["food"],
         "wood": game["wood"],
+        "shop": {"food_left": _shop_remaining(game, "food"), "wood_left": _shop_remaining(game, "wood")},
         "energy": game["energy"],
         "guests": len(game["guests"]),
         "rooms": {"used": _room_used(game), "cap": _room_capacity(game)},
@@ -2166,6 +2188,8 @@ def _advice(game: dict[str, Any]) -> str:
     room_actions = min(todo["room"], max(0, _room_capacity(game) - _room_used(game)))
     need_energy = room_actions + todo["meal"] + todo["bath"] + todo["complaint"]
     estimated_wood = _estimated_bath_wood(game, todo)
+    food_left = _shop_remaining(game, "food")
+    wood_left = _shop_remaining(game, "wood")
     lines.append(_strategy_advice(game, todo, estimated_wood, need_energy))
     if todo["room"]:
         lines.append("先去客房安排房间；还有{}位客人的钥匙牌没交出去。".format(todo["room"]))
@@ -2177,14 +2201,31 @@ def _advice(game: dict[str, Any]) -> str:
         lines.append("昨夜风大，建议去客房打扫/检查窗扣；处理后可让今天少一点悬着的心。")
     if todo["meal"]:
         if game["food"] < todo["meal"]:
-            lines.append("食材不足：还差{}份，先去厨房备料或去商店购买。".format(todo["meal"] - game["food"]))
+            lines.append(
+                "食材不足：还差{}份。商店今日还能买{}份；自己备料会让下一次餐食心情+1。".format(
+                    todo["meal"] - game["food"],
+                    food_left,
+                )
+            )
         else:
             lines.append("餐食待办{}份，厨房现在能支撑。".format(todo["meal"]))
+        if food_left <= 1:
+            lines.append("商店食材限购已接近上限；后续缺口建议用：备料。")
     if todo["bath"]:
         if game["wood"] < estimated_wood:
-            lines.append("温泉可能缺柴：预计要{}捆，现有{}捆，可先去庭院拾柴。".format(estimated_wood, game["wood"]))
+            lines.append(
+                "温泉可能缺柴：预计要{}捆，现有{}捆。商店今日还能买{}捆；自己拾柴会让下一次温泉心情+1。".format(
+                    estimated_wood,
+                    game["wood"],
+                    wood_left,
+                )
+            )
         else:
             lines.append("有{}位客人想泡温泉，柴火大致够用。".format(todo["bath"]))
+        if wood_left <= 1:
+            lines.append("商店柴火限购已接近上限；后续缺口建议用：拾柴。")
+    if game["weather"] == "wind":
+        lines.append("风天拾柴额外顺手，适合安排一次：去 庭院；拾柴。")
     if game["energy"] <= 1 and any(todo.values()):
         lines.append("体力快见底了，优先处理房间和客诉。")
     inspiration = _active_inspiration(game)
@@ -2255,8 +2296,15 @@ def _show_codex(game: dict[str, Any]) -> str:
 def _shop(game: dict[str, Any]) -> str:
     food_price = _shop_price(game, "food")
     wood_price = _shop_price(game, "wood")
+    food_left = _shop_remaining(game, "food")
+    wood_left = _shop_remaining(game, "wood")
     lines = [
-        "商店价目：食材{}钱/份，柴火{}钱/捆。".format(food_price, wood_price),
+        "商店价目：食材{}钱/份，柴火{}钱/捆；今日限购：食材剩{}份，柴火剩{}捆。第4件起有临采溢价。".format(
+            food_price,
+            wood_price,
+            food_left,
+            wood_left,
+        ),
         "升级：{}".format(
             "；".join(
                 "{}{}级→{}钱".format(
@@ -2274,9 +2322,33 @@ def _shop(game: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _shop_price(game: dict[str, Any], item: str) -> int:
+def _shop_bought(game: dict[str, Any], item: str) -> int:
+    bought = game.setdefault("shop_bought", {"food": 0, "wood": 0})
+    if not isinstance(bought, dict):
+        game["shop_bought"] = {"food": 0, "wood": 0}
+        bought = game["shop_bought"]
+    return int(bought.get(item, 0))
+
+
+def _shop_remaining(game: dict[str, Any], item: str) -> int:
+    return max(0, _SHOP_DAILY_LIMIT - _shop_bought(game, item))
+
+
+def _shop_price(game: dict[str, Any], item: str, offset: int = 0) -> int:
     base = 4 if item == "food" else 3
-    return max(1, base - int(_event_value(game, "shop_discount", 0)))
+    normal = max(1, base - int(_event_value(game, "shop_discount", 0)))
+    bought = _shop_bought(game, item) + offset
+    surcharge = max(0, bought - 2) * 2
+    return normal + surcharge
+
+
+def _shop_cost(game: dict[str, Any], item: str, amount: int) -> int:
+    return sum(_shop_price(game, item, offset) for offset in range(amount))
+
+
+def _record_shop_buy(game: dict[str, Any], item: str, amount: int) -> None:
+    bought = game.setdefault("shop_bought", {"food": 0, "wood": 0})
+    bought[item] = int(bought.get(item, 0)) + amount
 
 
 def _buy(game: dict[str, Any], text: str) -> str:
@@ -2284,27 +2356,41 @@ def _buy(game: dict[str, Any], text: str) -> str:
     amount = _first_number(text, 1)
     amount = max(1, min(20, amount))
     if _has(text, ["食材", "food", "菜"]):
-        cost = amount * _shop_price(game, "food")
+        remaining = _shop_remaining(game, "food")
+        if remaining <= 0:
+            return _with_auto_move(auto, "今天商店的食材已经买完了。想再补，只能自己备料。")
+        requested = amount
+        amount = min(amount, remaining)
+        cost = _shop_cost(game, "food", amount)
         if game["money"] < cost:
             return _with_auto_move(auto, "钱不够。{}份食材要{}钱。".format(amount, cost))
         game["money"] -= cost
         game["food"] += amount
+        _record_shop_buy(game, "food", amount)
         _advance_time(game)
         _record_action(game, "buys")
         _annual(game)["spent"] += cost
         extra = _unlock(game, "shop_stamp") if "shop_stamp" not in game["codex"] and amount >= 3 else ""
-        return _with_auto_move(auto, "买入{}份食材，花{}钱。{}".format(amount, cost, extra))
+        limited = "今日限购，实际只买到{}份。".format(amount) if requested > amount else ""
+        return _with_auto_move(auto, "{}买入{}份食材，花{}钱。{}".format(limited, amount, cost, extra))
     if _has(text, ["柴", "wood"]):
-        cost = amount * _shop_price(game, "wood")
+        remaining = _shop_remaining(game, "wood")
+        if remaining <= 0:
+            return _with_auto_move(auto, "今天商店的柴火已经买完了。想再补，只能去庭院拾柴。")
+        requested = amount
+        amount = min(amount, remaining)
+        cost = _shop_cost(game, "wood", amount)
         if game["money"] < cost:
             return _with_auto_move(auto, "钱不够。{}捆柴火要{}钱。".format(amount, cost))
         game["money"] -= cost
         game["wood"] += amount
+        _record_shop_buy(game, "wood", amount)
         _advance_time(game)
         _record_action(game, "buys")
         _annual(game)["spent"] += cost
         extra = _unlock(game, "shop_stamp") if "shop_stamp" not in game["codex"] and amount >= 3 else ""
-        return _with_auto_move(auto, "买入{}捆柴火，花{}钱。{}".format(amount, cost, extra))
+        limited = "今日限购，实际只买到{}捆。".format(amount) if requested > amount else ""
+        return _with_auto_move(auto, "{}买入{}捆柴火，花{}钱。{}".format(limited, amount, cost, extra))
     return _with_auto_move(auto, "商店能买：食材、柴火。例：买 食材 3。")
 
 
@@ -2436,12 +2522,15 @@ def _serve_meals(game: dict[str, Any], text: str) -> str:
         if guest["type"] == "apprentice_cook":
             mood += 1
         mood += int(trait.get("meal", 0)) + int(_event_value(game, "meal_mood", 0))
+        quality_bonus = _use_day_quality(game, "meal_quality")
+        mood += quality_bonus
         mood += _use_inspiration(game, "meal")
         guest["mood"] += mood
         served += 1
         menu = _seasonal_menu(game, guest["id"])
         guest["meal_name"] = menu
-        lines.append("给{}端上餐食《{}》，心情+{}。".format(guest["name"], menu, mood))
+        quality = "亲手备料的季节味道被尝出来了。" if quality_bonus else ""
+        lines.append("给{}端上餐食《{}》，心情+{}。{}".format(guest["name"], menu, mood, quality))
     if served:
         staff = _staff_memory(game, "meals")
         if staff:
@@ -2485,10 +2574,13 @@ def _serve_bath(game: dict[str, Any], text: str) -> str:
         trait = _trait(guest)
         mood = 2 + (1 if onsen >= 1 else 0) + (1 if game["weather"] == "rain" else 0)
         mood += int(trait.get("bath", 0))
+        quality_bonus = _use_day_quality(game, "bath_quality")
+        mood += quality_bonus
         mood += _use_inspiration(game, "bath")
         guest["mood"] += mood
         served += 1
-        lines.append("给{}备好温泉，耗柴{}，心情+{}。".format(guest["name"], wood_cost, mood))
+        quality = "亲手挑回的柴让水汽更稳。" if quality_bonus else ""
+        lines.append("给{}备好温泉，耗柴{}，心情+{}。{}".format(guest["name"], wood_cost, mood, quality))
     if served:
         staff = _staff_memory(game, "baths")
         if staff:
@@ -2535,11 +2627,22 @@ def _prep_food(game: dict[str, Any]) -> str:
     if game["weather"] == "sun":
         gain += 1
     game["food"] += gain
+    _add_day_quality(game, "meal_quality")
     _annual(game)["food_gained"] += gain
     staff = _staff_memory(game, "prep")
     rare = _maybe_rare(game, "kitchen")
     lines = [auto] if auto else []
     lines.append("你备好{}份食材。厨房的台面终于有了余裕。".format(gain))
+    lines.append("亲手备料留下了当季手感：下一次餐食心情+1。")
+    if game["weather"] == "sun":
+        lines.append("晴光把菜篮照得很亮，今天备料格外顺手。")
+    memory_chance = 28 + int(game["upgrades"].get("kitchen", 0)) * 6
+    if game["weather"] == "sun":
+        memory_chance += 12
+    if _chance(game, memory_chance):
+        game["memory"] += 1
+        _annual(game)["memory"] += 1
+        lines.append("季节小菜灵感：你记下今天这点味道，旅馆记忆+1。")
     if staff:
         lines.append(staff)
     if rare:
@@ -2557,11 +2660,24 @@ def _gather_wood(game: dict[str, Any]) -> str:
     if game["weather"] == "wind":
         gain += 1
     game["wood"] += gain
+    _add_day_quality(game, "bath_quality")
     _annual(game)["wood_gained"] += gain
     staff = _staff_memory(game, "wood")
     rare = _maybe_rare(game, "garden")
     lines = [auto] if auto else []
     lines.append("你拾回{}捆柴火，顺手把庭院小路理清。".format(gain))
+    lines.append("亲手挑回的柴火烧得更稳：下一次温泉心情+1。")
+    if game["weather"] == "wind":
+        lines.append("风把干枝吹到篱边，今天拾柴格外顺手。")
+    if game["weather"] == "snow":
+        lines.append("雪让柴棚路难走，但脚印把庭院的安静留得更深。")
+    memory_chance = 26 + int(game["upgrades"].get("garden", 0)) * 7
+    if game["weather"] in ("wind", "snow"):
+        memory_chance += 12
+    if _chance(game, memory_chance):
+        game["memory"] += 1
+        _annual(game)["memory"] += 1
+        lines.append("柴棚小记：你记住一截木头的干香，旅馆记忆+1。")
     if staff:
         lines.append(staff)
     if rare:
@@ -2795,6 +2911,14 @@ def _personality_lines(stats: dict[str, Any]) -> list[str]:
         lines.append("愿意花时间听人说话，适合经营有温度的小店")
     if actions["meals"] + actions["baths"] >= actions["rooms"] + max(1, guests // 4):
         lines.append("偏爱用餐食和温泉解决问题，风格柔软")
+    manual_logistics = actions["prep"] + actions["wood"]
+    purchases = actions["buys"]
+    if purchases >= max(3, manual_logistics * 2):
+        lines.append("采购型明显，倾向用现金流换服务体力")
+    elif manual_logistics >= purchases + 3:
+        lines.append("勤恳后勤型明显，愿意亲手备料拾柴换服务品质")
+    elif purchases and manual_logistics:
+        lines.append("后勤稳健，能在采购补缺口和亲手准备之间取平衡")
     if actions["buys"] + actions["upgrades"] >= actions["prep"] + actions["wood"] + 2:
         lines.append("相信投入会换来未来，带一点长期主义")
     if risk == 0 and guests > 0:
