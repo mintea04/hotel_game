@@ -269,6 +269,17 @@ _GUEST_TYPES = [
     },
 ]
 
+_RESERVED_GUEST_SPEC = {
+    "id": "reserved_guest",
+    "title": "预约卡上的客人",
+    "pay": 16,
+    "bath": 0,
+    "patience": 2,
+    "weight": 0,
+    "codex": "reservation_card",
+    "wish": "前厅收过一张写给旅馆的预约卡。",
+}
+
 _GUEST_PREFIX = ["沈", "林", "白", "陆", "江", "许", "闻", "乔", "夏", "程"]
 _GUEST_SUFFIX = ["灯", "岚", "舟", "遥", "青", "序", "棠", "禾", "眠", "川"]
 
@@ -469,6 +480,18 @@ _CODEX = {
     "housekeeping_fold": {
         "title": "客房折角单",
         "text": "床单折角整齐得像一句无声的欢迎，第二天仍然留着阳光味。",
+    },
+    "reservation_card": {
+        "title": "预约卡",
+        "text": "有人还没抵达，名字已经先在前厅有了一小块位置。",
+    },
+    "owner_note": {
+        "title": "馆主手账",
+        "text": "留言没有变成命令，却会在建议旁边压住账页的一角。",
+    },
+    "seeded_memory": {
+        "title": "被种下的记忆",
+        "text": "庭院多了一件并非随机发生的事，像有人在故事里轻轻放了坐标。",
     },
 }
 _CODEX_ORDER = list(_CODEX.keys())
@@ -848,6 +871,45 @@ _REGULAR_GIFTS = {
     "bath_scholar": ("一支量温用的小玻璃管", "memory", 1),
 }
 
+_RESERVATION_SIGNALS = {
+    "garden": {
+        "name": "庭院",
+        "keywords": ["庭院", "院子", "花", "绣球", "薄荷", "石灯", "雨声", "植物"],
+        "hint": "提到庭院里的花、气味或雨声",
+        "hit": "庭院",
+    },
+    "quiet": {
+        "name": "安静",
+        "keywords": ["安静", "静", "睡", "失眠", "水声", "不打扰", "别吵", "独处"],
+        "hint": "想要安静和不被催促的时间",
+        "hit": "安静",
+    },
+    "meal": {
+        "name": "餐食",
+        "keywords": ["早餐", "餐", "饭", "料理", "吃", "汤", "茶", "点心"],
+        "hint": "把餐食写进了预约",
+        "hit": "餐食",
+    },
+    "bath": {
+        "name": "温泉",
+        "keywords": ["温泉", "泡汤", "汤屋", "热水", "风吕"],
+        "hint": "在意温泉和热水",
+        "hit": "温泉",
+    },
+    "talk": {
+        "name": "聊天",
+        "keywords": ["聊天", "说话", "聊", "谈", "招呼", "礼宾", "陪"],
+        "hint": "希望有人愿意听他说话",
+        "hit": "聊天",
+    },
+    "no_rush": {
+        "name": "不催促",
+        "keywords": ["不喜欢被催", "不要催", "别催", "不催", "慢慢", "从容"],
+        "hint": "不喜欢被催促",
+        "hit": "从容",
+    },
+}
+
 _RATE_PLANS = {
     "budget": {
         "name": "亲民",
@@ -916,7 +978,8 @@ _HELP_TEXT = (
     "可说：去 前厅/客房/厨房/温泉/庭院/商店；客人；安排 全部；"
     + "照顾 全部；做饭 1；温泉 全部；客诉 全部；备料；拾柴；打扫；招呼；"
     + "定价 标准；承诺 温泉；收益；买 食材 3；升级 厨房；建议；保存为 一周目；读档 一周目；"
-    + "存档列表；备份存档；图鉴；状态；年度总结；结束一天；确认结束。"
+    + "预约客人 柳川 喜欢热茶和晚饭，想在前厅聊一会儿；主人留言 今天请先照顾赶路很累的人；"
+    + "种下记忆 庭院石灯旁放着一枚旧铜铃；查看预约；存档列表；备份存档；图鉴；状态；年度总结；结束一天；确认结束。"
     + "可用分号、换行或“然后”输入批量指令。"
 )
 
@@ -989,6 +1052,11 @@ def _fresh_game(seed: Any) -> dict[str, Any]:
         "served": 0,
         "guest_seq": 0,
         "guests": [],
+        "reservation_seq": 0,
+        "reservations": [],
+        "owner_notes": [],
+        "memory_seed_seq": 0,
+        "memory_seeds": [],
         "regular_seq": 0,
         "regulars": [],
         "staff": _new_staff_state(),
@@ -1179,10 +1247,177 @@ def _list_saves() -> str:
     return "命名存档：{}。备份{}份。".format("、".join(slots), backup_count)
 
 
+def _clip(text: str, limit: int = 46) -> str:
+    cleaned = " ".join(str(text).strip().split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: max(0, limit - 3)] + "..."
+
+
+def _command_body(raw: str, prefixes: list[str]) -> str:
+    text = raw.strip()
+    lowered = text.lower()
+    for prefix in sorted(prefixes, key=len, reverse=True):
+        if lowered.startswith(prefix):
+            return text[len(prefix) :].strip(" ：:，,")
+    return text
+
+
+def _reservation_name_and_text(body: str) -> tuple[str, str]:
+    body = body.strip()
+    if not body:
+        return "", ""
+    match = re.match(r"([^\s，,：:。；;]{1,16})[\s，,：:]+(.+)", body)
+    if match:
+        return _clip(match.group(1), 12), match.group(2).strip()
+    markers = ["不喜欢", "讨厌", "喜欢", "希望", "想", "会", "是"]
+    positions = [body.find(marker) for marker in markers if body.find(marker) > 0]
+    if positions:
+        split_at = min(positions)
+        return _clip(body[:split_at].strip(" ，,：:"), 12), body[split_at:].strip()
+    return _clip(body, 12), ""
+
+
+def _reservation_signals(text: str) -> list[str]:
+    lowered = str(text).lower()
+    signals = []
+    for key, spec in _RESERVATION_SIGNALS.items():
+        if any(keyword.lower() in lowered for keyword in spec["keywords"]):
+            signals.append(key)
+    return signals
+
+
+def _signal_names(signals: list[str]) -> str:
+    names = [_RESERVATION_SIGNALS[key]["name"] for key in signals if key in _RESERVATION_SIGNALS]
+    return "、".join(names) if names else "自然语言偏好"
+
+
+def _reservation_hint(reservation: dict[str, Any]) -> str:
+    signals = [str(key) for key in reservation.get("signals", [])]
+    hints = [_RESERVATION_SIGNALS[key]["hint"] for key in signals if key in _RESERVATION_SIGNALS]
+    if not hints:
+        raw = str(reservation.get("text", ""))
+        return "预约卡写得很轻：{}".format(_clip(raw, 34)) if raw else "预约卡写得很轻，只说想来看看旅馆"
+    return "、".join(hints[:3])
+
+
+def _pending_reservation_count(game: dict[str, Any]) -> int:
+    return sum(1 for item in game.get("reservations", []) if isinstance(item, dict))
+
+
+def _pending_memory_seed_count(game: dict[str, Any]) -> int:
+    return sum(
+        1
+        for item in game.get("memory_seeds", [])
+        if isinstance(item, dict) and not item.get("sprouted")
+    )
+
+
+def _add_reservation(game: dict[str, Any], raw: str) -> str:
+    body = _command_body(raw, ["预约客人", "预订客人", "预定客人", "客人预约"])
+    name, preference = _reservation_name_and_text(body)
+    if not name:
+        return "可以这样写预约卡：预约客人 柳川 喜欢热茶和晚饭，想在前厅聊一会儿。"
+    text = preference or "想来看看这间旅馆"
+    signals = _reservation_signals("{} {}".format(name, text))
+    game["reservation_seq"] = int(game.get("reservation_seq", 0)) + 1
+    arrival_day = max(1, int(game.get("day", 0))) + 1 + _randrange(game, 3)
+    reservation = {
+        "key": "v{}".format(game["reservation_seq"]),
+        "name": name,
+        "text": _clip(text, 90),
+        "signals": signals,
+        "created_day": int(game.get("day", 0)),
+        "arrival_day": arrival_day,
+    }
+    game.setdefault("reservations", []).append(reservation)
+    if len(game["reservations"]) > 24:
+        game["reservations"] = game["reservations"][-24:]
+    _annual(game)["reservations"] += 1
+    unlock = _unlock(game, "reservation_card")
+    return (
+        "前厅收到一张预约卡：{}。偏好被记下：{}。预计{}清晨抵达。{}"
+        + "AI店长可用“查看预约”复习公开预约。"
+    ).format(name, _signal_names(signals), _date_text(arrival_day), unlock)
+
+
+def _add_owner_note(game: dict[str, Any], raw: str) -> str:
+    body = _command_body(raw, ["主人留言", "馆主留言", "owner note", "留言"])
+    if not body:
+        return "可以这样写：主人留言 今天别让雨里来的人等太久。"
+    entry = {"day": int(game.get("day", 0)), "date": _date_text(max(1, int(game.get("day", 1)))), "text": _clip(body, 90)}
+    notes = game.setdefault("owner_notes", [])
+    notes.append(entry)
+    game["owner_notes"] = notes[-12:]
+    _annual(game)["owner_notes"] += 1
+    unlock = _unlock(game, "owner_note")
+    return "馆主留言夹进手账：“{}”。它不会强迫AI店长照做，但“建议”会把它当作价值观提醒。{}".format(
+        entry["text"],
+        unlock,
+    )
+
+
+def _add_memory_seed(game: dict[str, Any], raw: str) -> str:
+    body = _command_body(raw, ["种下记忆", "记忆种子", "种记忆", "seed memory"])
+    if not body:
+        return "可以这样写：种下记忆 庭院石灯旁放着一枚旧铜铃。"
+    game["memory_seed_seq"] = int(game.get("memory_seed_seq", 0)) + 1
+    seed = {
+        "key": "m{}".format(game["memory_seed_seq"]),
+        "day": int(game.get("day", 0)),
+        "date": _date_text(max(1, int(game.get("day", 1)))),
+        "season": _season(game)["name"],
+        "weather": _weather(game)["name"],
+        "text": _clip(body, 90),
+        "sprouted": False,
+    }
+    seeds = game.setdefault("memory_seeds", [])
+    seeds.append(seed)
+    game["memory_seeds"] = seeds[-24:]
+    _annual(game)["memory_seeds"] += 1
+    unlock = _unlock(game, "seeded_memory")
+    return "你把一粒记忆种进旅馆：“{}”。它会在之后的庭院里发芽，不会变成硬任务。{}".format(
+        seed["text"],
+        unlock,
+    )
+
+
+def _show_owner_book(game: dict[str, Any]) -> str:
+    lines = ["主人手账："]
+    reservations = [item for item in game.get("reservations", []) if isinstance(item, dict)]
+    if reservations:
+        lines.append("等待抵达的预约：")
+        for item in reservations[:6]:
+            lines.append(
+                "- {}：预计{}，{}。".format(
+                    item.get("name", "无名客"),
+                    _date_text(int(item.get("arrival_day", game.get("day", 1)))),
+                    _reservation_hint(item),
+                )
+            )
+    else:
+        lines.append("等待抵达的预约：暂无。")
+    notes = [item for item in game.get("owner_notes", []) if isinstance(item, dict)]
+    if notes:
+        lines.append("最近留言：{}".format(" / ".join(_clip(item.get("text", ""), 28) for item in notes[-2:])))
+    seeds = [item for item in game.get("memory_seeds", []) if isinstance(item, dict)]
+    pending = [item for item in seeds if not item.get("sprouted")]
+    if pending:
+        lines.append("未发芽的记忆种子：{}".format(" / ".join(_clip(item.get("text", ""), 28) for item in pending[-3:])))
+    else:
+        lines.append("未发芽的记忆种子：暂无。")
+    return "\n".join(lines)
+
+
 def _migrate(game: dict[str, Any]) -> dict[str, Any]:
     game.setdefault("version", _VERSION)
     game.setdefault("codex", [])
     game.setdefault("guests", [])
+    game.setdefault("reservation_seq", 0)
+    game.setdefault("reservations", [])
+    game.setdefault("owner_notes", [])
+    game.setdefault("memory_seed_seq", 0)
+    game.setdefault("memory_seeds", [])
     game.setdefault("regular_seq", 0)
     game.setdefault("regulars", [])
     game.setdefault("staff", _new_staff_state())
@@ -1283,6 +1518,11 @@ def _new_annual_stats() -> dict[str, Any]:
         "ancillary_revenue": 0,
         "promise_kept": 0,
         "promise_missed": 0,
+        "owner_notes": 0,
+        "reservations": 0,
+        "memory_seeds": 0,
+        "reserved_served": 0,
+        "reserved_fulfilled": 0,
         "actions": {
             "rooms": 0,
             "meals": 0,
@@ -1481,6 +1721,9 @@ def _garden_daily_moment(game: dict[str, Any]) -> str:
         "庭院小记：{}".format(_garden_scene(game)),
         _garden_weather_scene(game),
     ]
+    seed_line = _memory_seed_moment(game)
+    if seed_line:
+        lines.append(seed_line)
     rare = _maybe_rare(game, "garden")
     if rare:
         lines.append(rare)
@@ -1509,6 +1752,24 @@ def _garden_daily_moment(game: dict[str, Any]) -> str:
     else:
         lines.append("你在院里停了一会儿，没有急着把这点安静变成安排。")
     return "\n".join(lines)
+
+
+def _memory_seed_moment(game: dict[str, Any]) -> str:
+    seeds = [
+        item
+        for item in game.get("memory_seeds", [])
+        if isinstance(item, dict) and not item.get("sprouted")
+    ]
+    if not seeds:
+        return ""
+    seed = seeds[0]
+    seed["sprouted"] = True
+    seed["sprouted_day"] = int(game.get("day", 0))
+    game["memory"] += 1
+    _annual(game)["memory"] += 1
+    return "馆主种下的记忆发芽了：{}。它没有变成任务，只让庭院多了一层来处。旅馆记忆+1。".format(
+        seed.get("text", "")
+    )
 
 
 def _use_inspiration(game: dict[str, Any], target: str) -> int:
@@ -1561,6 +1822,9 @@ def _start_day(game: dict[str, Any]) -> str:
         ),
     ]
     for guest in game["guests"]:
+        reservation_line = _reservation_arrival_line(game, guest)
+        if reservation_line:
+            lines.append(reservation_line)
         returning_line = _returning_arrival_line(game, guest)
         if returning_line:
             lines.append(returning_line)
@@ -1596,6 +1860,8 @@ def _roll_day_event(game: dict[str, Any]) -> str:
 
 
 def _guest_spec(type_id: str) -> dict[str, Any]:
+    if type_id == _RESERVED_GUEST_SPEC["id"]:
+        return _RESERVED_GUEST_SPEC
     for spec in _GUEST_TYPES:
         if spec["id"] == type_id:
             return spec
@@ -1706,6 +1972,18 @@ def _returning_arrival_line(game: dict[str, Any], guest: dict[str, Any]) -> str:
     return line
 
 
+def _reservation_arrival_line(game: dict[str, Any], guest: dict[str, Any]) -> str:
+    reservation = guest.get("reservation", {})
+    if not isinstance(reservation, dict) or not reservation:
+        return ""
+    line = "预约客人：{}按预约卡抵达，{}。".format(
+        guest.get("name", "客人"),
+        _reservation_hint(reservation),
+    )
+    guest["note"] = line
+    return line
+
+
 def _pick_returning_guest(game: dict[str, Any]) -> dict[str, Any] | None:
     regulars = [
         regular
@@ -1720,6 +1998,68 @@ def _pick_returning_guest(game: dict[str, Any]) -> dict[str, Any] | None:
     if not _chance(game, chance):
         return None
     return regulars[_randrange(game, len(regulars))]
+
+
+def _take_due_reservations(game: dict[str, Any], limit: int) -> list[dict[str, Any]]:
+    day = int(game.get("day", 0))
+    due: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    for item in game.get("reservations", []):
+        if not isinstance(item, dict):
+            continue
+        arrival_day = int(item.get("arrival_day", day))
+        if day >= arrival_day and len(due) < limit:
+            due.append(dict(item))
+        elif day >= arrival_day:
+            postponed = dict(item)
+            postponed["arrival_day"] = day + 1
+            pending.append(postponed)
+        else:
+            pending.append(item)
+    game["reservations"] = pending
+    return due
+
+
+def _reserved_trait_id(signals: list[str]) -> str:
+    if "quiet" in signals or "no_rush" in signals:
+        return "quiet"
+    if "meal" in signals:
+        return "hungry"
+    if "bath" in signals:
+        return "soak"
+    if "talk" in signals:
+        return "chatty"
+    if "garden" in signals:
+        return "nostalgic"
+    return "nostalgic"
+
+
+def _build_reserved_guest(game: dict[str, Any], reservation: dict[str, Any]) -> dict[str, Any]:
+    signals = [str(key) for key in reservation.get("signals", []) if key in _RESERVATION_SIGNALS]
+    trait = _trait_spec(_reserved_trait_id(signals))
+    guest = _build_guest(game, _RESERVED_GUEST_SPEC, trait)
+    guest["name"] = _clip(str(reservation.get("name", "预约客")), 12)
+    guest["reservation"] = {
+        "key": str(reservation.get("key", "")),
+        "name": guest["name"],
+        "text": str(reservation.get("text", "")),
+        "signals": signals,
+        "created_day": int(reservation.get("created_day", 0)),
+    }
+    guest["wish"] = "预约卡：{}。原话：{}".format(
+        _reservation_hint(guest["reservation"]),
+        _clip(str(reservation.get("text", "")), 34),
+    )
+    guest["pay"] += min(2, len(signals) // 2)
+    if "bath" in signals:
+        guest["wants_bath"] = True
+    if "quiet" in signals or "no_rush" in signals:
+        guest["patience"] = max(int(guest.get("patience", 0)), 3)
+        if guest.get("complaint") and _chance(game, 50):
+            guest["complaint"] = False
+    if "talk" in signals and not guest.get("complaint") and _chance(game, 15):
+        guest["complaint"] = True
+    return guest
 
 
 def _build_guest(game: dict[str, Any], spec: dict[str, Any], trait: dict[str, Any], returning: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -1787,10 +2127,17 @@ def _make_guests(game: dict[str, Any]) -> list[dict[str, Any]]:
         count = max(1, count - 1)
     count += int(_event_value(game, "guest_delta", 0))
     count = max(1, count)
-    count = min(count, room_cap + 2)
+    max_today = room_cap + 2
+    due_reservations = _take_due_reservations(game, max_today)
+    count = max(count, len(due_reservations))
+    count = min(count, max_today)
     guests = []
+    for reservation in due_reservations:
+        if len(guests) >= count:
+            break
+        guests.append(_build_reserved_guest(game, reservation))
     returning = _pick_returning_guest(game)
-    if returning:
+    if returning and len(guests) < count:
         spec = _guest_spec(str(returning.get("type", "")))
         trait = _trait_spec(str(returning.get("trait", "")))
         guests.append(_build_guest(game, spec, trait, returning))
@@ -1859,9 +2206,11 @@ def _status_line(game: dict[str, Any]) -> str:
         "shop": {"food_left": _shop_remaining(game, "food"), "wood_left": _shop_remaining(game, "wood")},
         "energy": game["energy"],
         "guests": len(game["guests"]),
+        "reservations": _pending_reservation_count(game),
         "rooms": {"used": _room_used(game), "cap": _room_capacity(game)},
         "todo": todo,
         "memory": game["memory"],
+        "memory_seeds": _pending_memory_seed_count(game),
         "codex": len(game["codex"]),
         "saved": True,
     }
@@ -1892,6 +2241,14 @@ def _handle_command(game: dict[str, Any], raw: str) -> str:
         return _set_promise(game, text)
     if _starts_move(text):
         return _move(game, text)
+    if text.startswith(("预约客人", "预订客人", "预定客人", "客人预约")):
+        return _add_reservation(game, raw.strip())
+    if text.startswith(("主人留言", "馆主留言", "owner note", "留言")):
+        return _add_owner_note(game, raw.strip())
+    if text.startswith(("种下记忆", "记忆种子", "种记忆", "seed memory")):
+        return _add_memory_seed(game, raw.strip())
+    if _has(text, ["查看预约", "预约列表", "主人手账", "馆主手账", "预约"]):
+        return _show_owner_book(game)
     if _has(text, ["客人", "名单", "住客", "guest", "guests", "list"]):
         return _guest_list(game)
     if _has(text, ["图鉴", "记忆", "memory", "codex", "album"]):
@@ -2133,12 +2490,58 @@ def _nightly_fixed_cost(game: dict[str, Any]) -> tuple[int, list[str]]:
     return sum(cost for _, cost in costs), ["{}{}钱".format(name, cost) for name, cost in costs]
 
 
+def _today_reservation_signals(game: dict[str, Any]) -> set[str]:
+    signals: set[str] = set()
+    for guest in game.get("guests", []):
+        if not isinstance(guest, dict):
+            continue
+        reservation = guest.get("reservation", {})
+        if not isinstance(reservation, dict):
+            continue
+        for key in reservation.get("signals", []):
+            if key in _RESERVATION_SIGNALS:
+                signals.add(str(key))
+    return signals
+
+
+def _today_reservation_names(game: dict[str, Any]) -> list[str]:
+    return [
+        str(guest.get("name", "预约客"))
+        for guest in game.get("guests", [])
+        if isinstance(guest, dict) and isinstance(guest.get("reservation"), dict) and guest.get("reservation")
+    ]
+
+
+def _latest_owner_note(game: dict[str, Any]) -> str:
+    notes = [item for item in game.get("owner_notes", []) if isinstance(item, dict)]
+    if not notes:
+        return ""
+    return str(notes[-1].get("text", ""))
+
+
+def _reservation_today_advice(game: dict[str, Any]) -> str:
+    names = _today_reservation_names(game)
+    if not names:
+        pending = _pending_reservation_count(game)
+        if pending:
+            return "预约簿里还有{}张卡片未抵达，可用“查看预约”复习。".format(pending)
+        return ""
+    signals = sorted(_today_reservation_signals(game))
+    if signals:
+        return "预约提醒：{}今天在店里；公开偏好包括{}。".format(
+            "、".join(names),
+            _signal_names(signals),
+        )
+    return "预约提醒：{}今天在店里；预约卡写得很轻，适合多招呼一次。".format("、".join(names))
+
+
 def _strategy_advice(game: dict[str, Any], todo: dict[str, int], estimated_wood: int, need_energy: int) -> str:
     room_short = len(game["guests"]) > _room_capacity(game)
     resource_tight = game["food"] < todo["meal"] or game["wood"] < estimated_wood
     energy_tight = int(game["energy"]) < need_energy
     weather = str(game.get("weather", "sun"))
     bath_weather = weather in ("rain", "snow", "fog")
+    reserved_signals = _today_reservation_signals(game)
     reasons = []
     rate = "标准"
     promise = "均衡"
@@ -2154,16 +2557,32 @@ def _strategy_advice(game: dict[str, Any], todo: dict[str, int], estimated_wood:
         rate = "溢价"
         promise = "温泉"
         reasons.append("雨雾雪天温泉需求明显，柴火也撑得住")
+    elif "bath" in reserved_signals and todo["bath"] and game["wood"] >= estimated_wood:
+        rate = "溢价" if not todo["complaint"] else "标准"
+        promise = "温泉"
+        reasons.append("预约卡里写到温泉，今天可以让承诺和来意对上")
     elif todo["meal"] and game["food"] >= todo["meal"] + 1 and todo["meal"] >= max(1, room_actions := min(todo["room"], _room_capacity(game))):
         rate = "溢价" if not todo["complaint"] else "标准"
         promise = "餐食"
         reasons.append("食材宽裕，餐食能承接今天的房价")
         if room_actions:
             reasons.append("预计可入住{}位客人".format(room_actions))
+    elif "meal" in reserved_signals and todo["meal"] and game["food"] >= todo["meal"]:
+        rate = "标准"
+        promise = "餐食"
+        reasons.append("预约卡里写到餐食，先把这份来意端上桌")
     elif todo["complaint"]:
         rate = "标准"
         promise = "礼宾"
         reasons.append("客诉已经出现，先把前厅的照顾做稳")
+    elif "talk" in reserved_signals:
+        rate = "标准"
+        promise = "礼宾"
+        reasons.append("预约客想被听见，礼宾承诺比硬冲收益更稳")
+    elif reserved_signals.intersection({"quiet", "no_rush"}) and not game["flags"].get("check_windows"):
+        rate = "标准"
+        promise = "安静"
+        reasons.append("预约卡强调安静或从容，适合把走廊和节奏放稳")
     elif game["flags"].get("check_windows"):
         rate = "标准"
         promise = "均衡"
@@ -2190,6 +2609,12 @@ def _advice(game: dict[str, Any]) -> str:
     estimated_wood = _estimated_bath_wood(game, todo)
     food_left = _shop_remaining(game, "food")
     wood_left = _shop_remaining(game, "wood")
+    owner_note = _latest_owner_note(game)
+    if owner_note:
+        lines.append("馆主留言：{}。这是价值观提醒，不是强制命令。".format(owner_note))
+    reservation_tip = _reservation_today_advice(game)
+    if reservation_tip:
+        lines.append(reservation_tip)
     lines.append(_strategy_advice(game, todo, estimated_wood, need_energy))
     if todo["room"]:
         lines.append("先去客房安排房间；还有{}位客人的钥匙牌没交出去。".format(todo["room"]))
@@ -2263,14 +2688,19 @@ def _guest_list(game: dict[str, Any]) -> str:
         if guest["complaint"]:
             marks.append("客诉!")
         mood = "心情{:+d}".format(int(guest["mood"]))
-        returning = "，回头客" if guest.get("returning") else ""
+        badges = []
+        if guest.get("returning"):
+            badges.append("回头客")
+        if isinstance(guest.get("reservation"), dict) and guest.get("reservation"):
+            badges.append("预约客")
+        badge_text = "，{}".format("，".join(badges)) if badges else ""
         lines.append(
             "{}. {}（{}，{}{}）{}；{}；愿望：{}；性格：{}".format(
                 idx,
                 guest["name"],
                 guest["title"],
                 trait["name"],
-                returning,
+                badge_text,
                 "、".join(marks),
                 mood,
                 guest["wish"],
@@ -2278,7 +2708,8 @@ def _guest_list(game: dict[str, Any]) -> str:
             )
         )
         if guest.get("note"):
-            lines.append("   回声：{}".format(guest["note"]))
+            label = "预约卡" if isinstance(guest.get("reservation"), dict) and guest.get("reservation") else "回声"
+            lines.append("   {}：{}".format(label, guest["note"]))
     return "\n".join(lines)
 
 
@@ -2847,6 +3278,7 @@ def _annual_numbers(stats: dict[str, Any]) -> str:
         (
             "年内记录：接待{}位，留宿{}位，收入{}钱，支出{}钱，记忆+{}，图鉴+{}；"
             + "经营：OCC {:.1f}%，ADR {:.1f}，RevPAR {:.1f}，承诺兑现{}次、落空{}次；"
+            + "馆主参与：留言{}、预约{}、预约照顾{}/{}、记忆种子{}；"
             + "照顾：房{}、饭{}、汤{}、客诉{}、打扫{}、招呼{}；"
             + "后勤：备料{}、拾柴{}、购物{}、升级{}；疏漏：房{}、饭{}、汤{}、客诉{}。"
         )
@@ -2862,6 +3294,11 @@ def _annual_numbers(stats: dict[str, Any]) -> str:
         revpar,
         stats.get("promise_kept", 0),
         stats.get("promise_missed", 0),
+        stats.get("owner_notes", 0),
+        stats.get("reservations", 0),
+        stats.get("reserved_fulfilled", 0),
+        stats.get("reserved_served", 0),
+        stats.get("memory_seeds", 0),
         actions["rooms"],
         actions["meals"],
         actions["baths"],
@@ -2911,6 +3348,11 @@ def _personality_lines(stats: dict[str, Any]) -> list[str]:
         lines.append("愿意花时间听人说话，适合经营有温度的小店")
     if actions["meals"] + actions["baths"] >= actions["rooms"] + max(1, guests // 4):
         lines.append("偏爱用餐食和温泉解决问题，风格柔软")
+    if int(stats.get("owner_notes", 0)) or int(stats.get("reservations", 0)) or int(stats.get("memory_seeds", 0)):
+        if int(stats.get("reserved_served", 0)):
+            lines.append("会回应馆主留下的预约和记忆，让外部心愿进入经营")
+        else:
+            lines.append("旅馆开始接收馆主的留言与种子，等待AI店长把它们接进日常")
     manual_logistics = actions["prep"] + actions["wood"]
     purchases = actions["buys"]
     if purchases >= max(3, manual_logistics * 2):
@@ -3041,6 +3483,71 @@ def _remember_regular(game: dict[str, Any], guest: dict[str, Any]) -> str:
     return ""
 
 
+def _reservation_unserved_line(game: dict[str, Any], guest: dict[str, Any]) -> str:
+    reservation = guest.get("reservation", {})
+    if not isinstance(reservation, dict) or not reservation:
+        return ""
+    return "{}的预约卡没能落成房间，柜台把这次错过夹回手账。".format(guest.get("name", "预约客"))
+
+
+def _settle_reservation(game: dict[str, Any], guest: dict[str, Any]) -> str:
+    reservation = guest.get("reservation", {})
+    if not isinstance(reservation, dict) or not reservation:
+        return ""
+    day_actions = game.get("day_actions", {})
+    signals = [str(key) for key in reservation.get("signals", []) if key in _RESERVATION_SIGNALS]
+    hits = []
+    misses = []
+    for key in signals:
+        name = _RESERVATION_SIGNALS[key]["hit"]
+        if key == "garden":
+            ok = int(day_actions.get("garden_visits", 0)) > 0 or int(day_actions.get("wood", 0)) > 0
+        elif key == "quiet":
+            ok = bool(guest.get("room")) and not bool(guest.get("complaint")) and not game["flags"].get("check_windows")
+        elif key == "meal":
+            ok = bool(guest.get("meal"))
+        elif key == "bath":
+            ok = bool(guest.get("bath"))
+        elif key == "talk":
+            ok = int(day_actions.get("greet", 0)) > 0 or int(day_actions.get("complaints", 0)) > 0
+        elif key == "no_rush":
+            ok = bool(guest.get("room")) and int(game.get("clock", 0)) < len(_TIME_SLOTS) - 1
+        else:
+            ok = False
+        if ok:
+            hits.append(name)
+        else:
+            misses.append(name)
+    if not signals:
+        if int(day_actions.get("greet", 0)) > 0 or guest.get("meal") or guest.get("bath"):
+            hits.append("被认真招呼")
+        else:
+            misses.append("多一点招呼")
+    mood_delta = min(3, len(hits)) - min(2, max(0, len(misses) - 1))
+    guest["mood"] += mood_delta
+    stats = _annual(game)
+    stats["reserved_served"] += 1
+    fulfilled = bool(hits) and len(hits) >= max(1, (len(signals) + 1) // 2)
+    if fulfilled:
+        stats["reserved_fulfilled"] += 1
+        game["memory"] += 1
+        stats["memory"] += 1
+    if hits:
+        line = "{}离店时把预约卡折回去：被接住的是{}。".format(
+            guest.get("name", "预约客"),
+            "、".join(hits),
+        )
+    else:
+        line = "{}离店时说下次也许再慢慢认识这里，这次更像一次温柔的错过。".format(
+            guest.get("name", "预约客")
+        )
+    if misses:
+        line += "还没等到的是{}。".format("、".join(misses[:3]))
+    if fulfilled:
+        line += "旅馆记忆+1。"
+    return line
+
+
 def _settle_promise(game: dict[str, Any], guest: dict[str, Any], rate: dict[str, Any]) -> dict[str, int]:
     key = str(game.get("promise", "balanced"))
     if key == "balanced":
@@ -3157,6 +3664,9 @@ def _end_day(game: dict[str, Any], confirmed: bool = False) -> str:
             guest["mood"] -= 3
             missed_rooms += 1
             lines.append("{}没有住下，只在门口点了点头。".format(guest["name"]))
+            reservation_miss = _reservation_unserved_line(game, guest)
+            if reservation_miss:
+                lines.append(reservation_miss)
             continue
         served_today += 1
         guest["mood"] += int(rate.get("mood", 0))
@@ -3182,6 +3692,9 @@ def _end_day(game: dict[str, Any], confirmed: bool = False) -> str:
         guest_room_refund += promise_result["refund"]
         promise_kept += promise_result["kept"]
         promise_missed += promise_result["missed"]
+        reservation_line = _settle_reservation(game, guest)
+        if reservation_line:
+            lines.append(reservation_line)
         if guest["mood"] >= 3:
             tip = max(0, min(8, 1 + guest["mood"] + int(trait.get("tip", 0))))
             guest_ancillary += tip

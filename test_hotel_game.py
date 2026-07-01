@@ -373,6 +373,37 @@ class HotelGameTests(unittest.TestCase):
         self.assertEqual(status["year"], 2)
         self.assertEqual(status["season"], "春")
 
+    def test_owner_participation_reservation_note_and_memory_seed(self):
+        hotel_game.new_game("owner-seed")
+        reserved = hotel_game.cmd("预约客人 柳川 喜欢热茶和晚饭，想在前厅聊一会儿")
+        self.assertIn("前厅收到一张预约卡：柳川", reserved)
+        self.assertEqual(status_from(reserved)["reservations"], 1)
+        note = hotel_game.cmd("主人留言 今天请先照顾赶路很累的人")
+        self.assertIn("馆主留言夹进手账", note)
+        advice = hotel_game.cmd("建议")
+        self.assertIn("馆主留言", advice)
+        seed = hotel_game.cmd("种下记忆 庭院石灯旁放着一枚旧铜铃")
+        self.assertIn("一粒记忆", seed)
+        garden = hotel_game.cmd("去 庭院")
+        self.assertIn("馆主种下的记忆发芽", garden)
+        self.assertEqual(status_from(garden)["memory_seeds"], 0)
+        book = hotel_game.cmd("查看预约")
+        self.assertIn("等待抵达的预约", book)
+        arrival_day = hotel_game._GAME["reservations"][0]["arrival_day"]
+        out = ""
+        while hotel_game._GAME["day"] < arrival_day:
+            out = hotel_game.cmd("确认结束")
+        self.assertIn("预约客人：柳川", out)
+        guests = hotel_game.cmd("客人")
+        self.assertIn("预约客", guests)
+        self.assertIn("柳川", guests)
+        checkout = hotel_game.cmd("安排 柳川; 客诉 柳川; 做饭 柳川; 招呼; 确认结束")
+        self.assertIn("预约卡折回去", checkout)
+        self.assertIn("旅馆记忆+1", checkout)
+        preview = hotel_game.cmd("年度总结")
+        self.assertIn("馆主参与", preview)
+        self.assertIn("预约照顾", preview)
+
     def test_blind_generator_output_runs(self):
         target = os.path.join(self.tmp.name, "hotel_game_blind.py")
         subprocess.run(
