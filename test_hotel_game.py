@@ -155,7 +155,11 @@ class HotelGameTests(unittest.TestCase):
         out = hotel_game.cmd("安排 全部; 做饭 全部")
         status = status_from(out)
         self.assertEqual(status["loc"], "厨房")
+        self.assertIn("你先绕到客房走廊", out)
+        self.assertIn("你先绕到厨房，系上围裙", out)
         self.assertIn("端上餐食《", out)
+        bought = hotel_game.cmd("买 食材 1")
+        self.assertIn("你先绕到街角商店", bought)
 
     def test_garden_moment_explains_inspiration_effect(self):
         hotel_game.new_game("garden-0")

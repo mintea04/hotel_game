@@ -910,6 +910,15 @@ _HELP_TEXT = (
     + "可用分号、换行或“然后”输入批量指令。"
 )
 
+_AUTO_MOVE_LINES = {
+    "front": "你先回到前厅，把柜铃旁的账本摊开。",
+    "rooms": "你先绕到客房走廊，把钥匙牌按顺序拨亮。",
+    "kitchen": "你先绕到厨房，系上围裙。",
+    "onsen": "你先走到汤屋，掀起竹帘试了试水汽。",
+    "garden": "你先走进庭院，顺手看了看通往柴棚的小路。",
+    "shop": "你先绕到街角商店，门口价签被风翻了一下。",
+}
+
 
 def new_game(seed: Any = _DEFAULT_SEED) -> str:
     """Start a deterministic new game and save it."""
@@ -2213,50 +2222,46 @@ def _shop_price(game: dict[str, Any], item: str) -> int:
 
 
 def _buy(game: dict[str, Any], text: str) -> str:
-    need = _need_location(game, "shop")
-    if need:
-        return need
+    auto = _auto_move(game, "shop")
     amount = _first_number(text, 1)
     amount = max(1, min(20, amount))
     if _has(text, ["食材", "food", "菜"]):
         cost = amount * _shop_price(game, "food")
         if game["money"] < cost:
-            return "钱不够。{}份食材要{}钱。".format(amount, cost)
+            return _with_auto_move(auto, "钱不够。{}份食材要{}钱。".format(amount, cost))
         game["money"] -= cost
         game["food"] += amount
         _advance_time(game)
         _record_action(game, "buys")
         _annual(game)["spent"] += cost
         extra = _unlock(game, "shop_stamp") if "shop_stamp" not in game["codex"] and amount >= 3 else ""
-        return "买入{}份食材，花{}钱。{}".format(amount, cost, extra)
+        return _with_auto_move(auto, "买入{}份食材，花{}钱。{}".format(amount, cost, extra))
     if _has(text, ["柴", "wood"]):
         cost = amount * _shop_price(game, "wood")
         if game["money"] < cost:
-            return "钱不够。{}捆柴火要{}钱。".format(amount, cost)
+            return _with_auto_move(auto, "钱不够。{}捆柴火要{}钱。".format(amount, cost))
         game["money"] -= cost
         game["wood"] += amount
         _advance_time(game)
         _record_action(game, "buys")
         _annual(game)["spent"] += cost
         extra = _unlock(game, "shop_stamp") if "shop_stamp" not in game["codex"] and amount >= 3 else ""
-        return "买入{}捆柴火，花{}钱。{}".format(amount, cost, extra)
-    return "商店能买：食材、柴火。例：买 食材 3。"
+        return _with_auto_move(auto, "买入{}捆柴火，花{}钱。{}".format(amount, cost, extra))
+    return _with_auto_move(auto, "商店能买：食材、柴火。例：买 食材 3。")
 
 
 def _upgrade(game: dict[str, Any], text: str) -> str:
-    need = _need_location(game, "shop")
-    if need:
-        return need
+    auto = _auto_move(game, "shop")
     target = _find_upgrade(text)
     if target is None:
-        return "可升级：{}。".format("、".join(spec["name"] for spec in _UPGRADES.values()))
+        return _with_auto_move(auto, "可升级：{}。".format("、".join(spec["name"] for spec in _UPGRADES.values())))
     spec = _UPGRADES[target]
     level = int(game["upgrades"][target])
     if level >= spec["max"]:
-        return "{}已经满级。".format(spec["name"])
+        return _with_auto_move(auto, "{}已经满级。".format(spec["name"]))
     cost = _upgrade_cost(game, target)
     if game["money"] < cost:
-        return "钱不够。升级{}需要{}钱。".format(spec["name"], cost)
+        return _with_auto_move(auto, "钱不够。升级{}需要{}钱。".format(spec["name"], cost))
     game["money"] -= cost
     game["upgrades"][target] = level + 1
     _advance_time(game)
@@ -2265,7 +2270,7 @@ def _upgrade(game: dict[str, Any], text: str) -> str:
     if target == "garden":
         game["max_energy"] = 6 + min(2, int(game["upgrades"]["garden"]))
         game["energy"] = min(game["energy"] + 1, game["max_energy"])
-    return "升级{}到{}级。{}".format(spec["name"], level + 1, spec["effect"])
+    return _with_auto_move(auto, "升级{}到{}级。{}".format(spec["name"], level + 1, spec["effect"]))
 
 
 def _upgrade_cost(game: dict[str, Any], key: str) -> int:
@@ -2283,11 +2288,17 @@ def _find_upgrade(text: str) -> str | None:
     return None
 
 
-def _need_location(game: dict[str, Any], key: str) -> str:
+def _auto_move(game: dict[str, Any], key: str) -> str:
     if game["location"] == key:
         return ""
     game["location"] = key
-    return ""
+    return _AUTO_MOVE_LINES.get(key, "你先来到{}。".format(_loc_name(key)))
+
+
+def _with_auto_move(auto: str, text: str) -> str:
+    if auto and text:
+        return "{}\n{}".format(auto, text)
+    return auto or text
 
 
 def _standard_care(game: dict[str, Any], text: str) -> str:
@@ -2307,13 +2318,11 @@ def _standard_care(game: dict[str, Any], text: str) -> str:
 
 
 def _assign_rooms(game: dict[str, Any], text: str) -> str:
-    need = _need_location(game, "rooms")
-    if need:
-        return need
+    auto = _auto_move(game, "rooms")
     guests = _select_guests(game, text, lambda guest: not guest["room"])
     if not guests:
-        return "没有需要安排房间的客人。"
-    lines = []
+        return _with_auto_move(auto, "没有需要安排房间的客人。")
+    lines = [auto] if auto else []
     assigned = 0
     for guest in guests:
         if game["energy"] <= 0:
@@ -2340,16 +2349,14 @@ def _assign_rooms(game: dict[str, Any], text: str) -> str:
 
 
 def _serve_meals(game: dict[str, Any], text: str) -> str:
-    need = _need_location(game, "kitchen")
-    if need:
-        return need
+    auto = _auto_move(game, "kitchen")
     guests = _select_guests(game, text, lambda guest: guest["room"] and not guest["meal"])
     if not guests:
         waiting = sum(1 for guest in game["guests"] if not guest["room"] and not guest["meal"])
         if waiting:
-            return "默认只给已安排房间的住客上餐；还有{}位客人没拿到钥匙牌。".format(waiting)
-        return "已入住的客人都吃过了。"
-    lines = []
+            return _with_auto_move(auto, "默认只给已安排房间的住客上餐；还有{}位客人没拿到钥匙牌。".format(waiting))
+        return _with_auto_move(auto, "已入住的客人都吃过了。")
+    lines = [auto] if auto else []
     kitchen = int(game["upgrades"]["kitchen"])
     served = 0
     for guest in guests:
@@ -2384,9 +2391,7 @@ def _serve_meals(game: dict[str, Any], text: str) -> str:
 
 
 def _serve_bath(game: dict[str, Any], text: str) -> str:
-    need = _need_location(game, "onsen")
-    if need:
-        return need
+    auto = _auto_move(game, "onsen")
     guests = _select_guests(
         game,
         text,
@@ -2399,9 +2404,9 @@ def _serve_bath(game: dict[str, Any], text: str) -> str:
             if not guest["room"] and not guest["bath"] and guest["wants_bath"]
         )
         if waiting:
-            return "默认只给已安排房间的住客备温泉；还有{}位想泡汤的客人没拿到钥匙牌。".format(waiting)
-        return "已入住的客人里，没有特别想泡温泉的人。"
-    lines = []
+            return _with_auto_move(auto, "默认只给已安排房间的住客备温泉；还有{}位想泡汤的客人没拿到钥匙牌。".format(waiting))
+        return _with_auto_move(auto, "已入住的客人里，没有特别想泡温泉的人。")
+    lines = [auto] if auto else []
     onsen = int(game["upgrades"]["onsen"])
     served = 0
     for guest in guests:
@@ -2436,13 +2441,11 @@ def _serve_bath(game: dict[str, Any], text: str) -> str:
 
 
 def _handle_complaints(game: dict[str, Any], text: str) -> str:
-    need = _need_location(game, "front")
-    if need:
-        return need
+    auto = _auto_move(game, "front")
     guests = _select_guests(game, text, lambda guest: guest["complaint"])
     if not guests:
-        return "前厅暂时没有客诉。"
-    lines = []
+        return _with_auto_move(auto, "前厅暂时没有客诉。")
+    lines = [auto] if auto else []
     handled = 0
     for guest in guests:
         if game["energy"] <= 0:
@@ -2464,11 +2467,9 @@ def _handle_complaints(game: dict[str, Any], text: str) -> str:
 
 
 def _prep_food(game: dict[str, Any]) -> str:
-    need = _need_location(game, "kitchen")
-    if need:
-        return need
+    auto = _auto_move(game, "kitchen")
     if game["energy"] <= 0:
-        return "体力用尽，菜篮提不起来。"
+        return _with_auto_move(auto, "体力用尽，菜篮提不起来。")
     _spend_energy(game)
     _record_action(game, "prep")
     gain = 2 + int(game["upgrades"]["kitchen"])
@@ -2478,7 +2479,8 @@ def _prep_food(game: dict[str, Any]) -> str:
     _annual(game)["food_gained"] += gain
     staff = _staff_memory(game, "prep")
     rare = _maybe_rare(game, "kitchen")
-    lines = ["你备好{}份食材。厨房的台面终于有了余裕。".format(gain)]
+    lines = [auto] if auto else []
+    lines.append("你备好{}份食材。厨房的台面终于有了余裕。".format(gain))
     if staff:
         lines.append(staff)
     if rare:
@@ -2487,11 +2489,9 @@ def _prep_food(game: dict[str, Any]) -> str:
 
 
 def _gather_wood(game: dict[str, Any]) -> str:
-    need = _need_location(game, "garden")
-    if need:
-        return need
+    auto = _auto_move(game, "garden")
     if game["energy"] <= 0:
-        return "体力用尽，柴棚看起来格外远。"
+        return _with_auto_move(auto, "体力用尽，柴棚看起来格外远。")
     _spend_energy(game)
     _record_action(game, "wood")
     gain = 2 + int(game["upgrades"]["garden"]) + int(_event_value(game, "wood_gain", 0))
@@ -2501,7 +2501,8 @@ def _gather_wood(game: dict[str, Any]) -> str:
     _annual(game)["wood_gained"] += gain
     staff = _staff_memory(game, "wood")
     rare = _maybe_rare(game, "garden")
-    lines = ["你拾回{}捆柴火，顺手把庭院小路理清。".format(gain)]
+    lines = [auto] if auto else []
+    lines.append("你拾回{}捆柴火，顺手把庭院小路理清。".format(gain))
     if staff:
         lines.append(staff)
     if rare:
@@ -2510,11 +2511,9 @@ def _gather_wood(game: dict[str, Any]) -> str:
 
 
 def _clean_rooms(game: dict[str, Any]) -> str:
-    need = _need_location(game, "rooms")
-    if need:
-        return need
+    auto = _auto_move(game, "rooms")
     if game["energy"] <= 0:
-        return "体力用尽，抹布被你搭在门把上。"
+        return _with_auto_move(auto, "体力用尽，抹布被你搭在门把上。")
     _spend_energy(game)
     _record_action(game, "clean")
     window_line = ""
@@ -2534,7 +2533,8 @@ def _clean_rooms(game: dict[str, Any]) -> str:
                 extra += 1
     if helped == 0:
         staff = _staff_memory(game, "clean")
-        lines = ["你把空房打扫干净。今晚若有人入住，会少一点灰尘。"]
+        lines = [auto] if auto else []
+        lines.append("你把空房打扫干净。今晚若有人入住，会少一点灰尘。")
         if window_line:
             lines.append(window_line)
         if staff:
@@ -2543,18 +2543,20 @@ def _clean_rooms(game: dict[str, Any]) -> str:
     staff = _staff_memory(game, "clean")
     rare = _maybe_rare(game, "rooms")
     if rare:
-        lines = [
-            "你打扫了走廊和房间，{}位客人心情+1。".format(helped),
-            rare,
-        ]
+        first = "你打扫了走廊和房间，{}位客人心情+1。".format(helped)
         if extra:
-            lines[0] = "你打扫了走廊和房间，{}位客人心情+1，其中{}位特别受用。".format(helped, extra)
-        if window_line:
-            lines.insert(1, window_line)
+            first = "你打扫了走廊和房间，{}位客人心情+1，其中{}位特别受用。".format(helped, extra)
+        lines = [auto] if auto else []
+        lines.append(first)
         if staff:
-            lines.insert(1, staff)
+            lines.append(staff)
+        if window_line:
+            lines.append(window_line)
+        lines.append(rare)
         return "\n".join(lines)
     base = "你打扫了走廊和房间，{}位客人心情+1，其中{}位特别受用。".format(helped, extra) if extra else "你打扫了走廊和房间，{}位客人的心情各+1。".format(helped)
+    if auto:
+        base = "{}\n{}".format(auto, base)
     if window_line:
         base = "{}\n{}".format(base, window_line)
     if staff:
@@ -2563,15 +2565,13 @@ def _clean_rooms(game: dict[str, Any]) -> str:
 
 
 def _greet(game: dict[str, Any]) -> str:
-    need = _need_location(game, "front")
-    if need:
-        return need
+    auto = _auto_move(game, "front")
     if game["energy"] <= 0:
-        return "体力用尽，前厅只剩柜铃陪你。"
+        return _with_auto_move(auto, "体力用尽，前厅只剩柜铃陪你。")
     _spend_energy(game)
     _record_action(game, "greet")
     if not game["guests"]:
-        return "你把前厅的灯调亮一点，虽然今天没有客人。"
+        return _with_auto_move(auto, "你把前厅的灯调亮一点，虽然今天没有客人。")
     extra = 0
     inspiration_bonus = _use_inspiration(game, "greet")
     for guest in game["guests"]:
@@ -2582,6 +2582,8 @@ def _greet(game: dict[str, Any]) -> str:
                 extra += 1
     rare = _maybe_rare(game, "front")
     base = "你在前厅招呼大家，没在抱怨的客人心情+1。"
+    if auto:
+        base = "{}\n{}".format(auto, base)
     if extra:
         base += "{}位爱聊天的客人多坐了一会儿。".format(extra)
     staff = _staff_memory(game, "greet")
