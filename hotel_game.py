@@ -501,6 +501,8 @@ _STAFF = {
         "name": "礼宾姐姐",
         "action": ["complaints", "greet"],
         "codex": "concierge_note",
+        "rumor": "前厅便签被人顺手压在柜铃下，字迹很稳。",
+        "meet": "礼宾姐姐说：你愿意听人把话说完，那我明天也来柜台旁站一会儿。",
         "lines": [
             "礼宾姐姐把今日客诉记进便签，提醒你：听完比答得快更重要。",
             "礼宾姐姐开始替你预判客人的伞、车和沉默，前厅像有了第二双眼睛。",
@@ -510,6 +512,8 @@ _STAFF = {
         "name": "厨房阿姨",
         "action": ["meals", "prep"],
         "codex": "kitchen_apron",
+        "rumor": "厨房门口有人把汤勺摆正，但没留下名字。",
+        "meet": "厨房阿姨说：你不是只把饭当成收入，那我明天也来搭把手。",
         "lines": [
             "厨房阿姨把汤勺递给你，说火候和人心一样，急不得。",
             "厨房阿姨悄悄多留一碗汤，像把旅馆的晚安藏进灶台。",
@@ -519,6 +523,8 @@ _STAFF = {
         "name": "接驳车司机",
         "action": ["wood", "garden_visits"],
         "codex": "shuttle_key",
+        "rumor": "门口车辙停了一小段，像有人顺路看过柴棚。",
+        "meet": "接驳车司机笑着说：山路会晚一点把人送来，我也能晚一点等。",
         "lines": [
             "接驳车司机在门口抖落风声，说山路今天会晚一点把人送来。",
             "接驳车司机把备用钥匙交给柜台，像把远路也托付给旅馆。",
@@ -528,6 +534,8 @@ _STAFF = {
         "name": "汤守",
         "action": ["baths", "wood"],
         "codex": "bath_keeper_tag",
+        "rumor": "汤屋的温度牌被人擦过一遍，水汽显得更稳。",
+        "meet": "汤守摸了摸竹帘，说：你把柴火当成照顾，不只是燃料。",
         "lines": [
             "汤守摸了摸水汽，说今天的温度刚好能让疲惫松开。",
             "汤守把旧温度牌挂回墙上，温泉像多记住了一种安静。",
@@ -537,6 +545,8 @@ _STAFF = {
         "name": "客房前辈",
         "action": ["rooms", "clean"],
         "codex": "housekeeping_fold",
+        "rumor": "走廊尽头的备用枕套被重新叠过，折角很干净。",
+        "meet": "客房前辈说：钥匙牌交出去前，房间就该先学会欢迎。",
         "lines": [
             "客房前辈替你压平床单边角，说第一眼安心很要紧。",
             "客房前辈把备用枕套叠好，走廊里像多了一句欢迎回来。",
@@ -979,7 +989,7 @@ _HELP_TEXT = (
     + "照顾 全部；做饭 1；温泉 全部；客诉 全部；备料；拾柴；打扫；招呼；"
     + "定价 标准；承诺 温泉；收益；买 食材 3；升级 厨房；建议；保存为 一周目；读档 一周目；"
     + "预约客人 柳川 喜欢热茶和晚饭，想在前厅聊一会儿；主人留言 今天请先照顾赶路很累的人；"
-    + "种下记忆 庭院石灯旁放着一枚旧铜铃；查看预约；存档列表；备份存档；图鉴；状态；年度总结；结束一天；确认结束。"
+    + "种下记忆 庭院石灯旁放着一枚旧铜铃；查看预约；帮手；存档列表；备份存档；图鉴；状态；年度总结；结束一天；确认结束。"
     + "可用分号、换行或“然后”输入批量指令。"
 )
 
@@ -1422,7 +1432,13 @@ def _migrate(game: dict[str, Any]) -> dict[str, Any]:
     game.setdefault("regulars", [])
     game.setdefault("staff", _new_staff_state())
     for key, value in _new_staff_state().items():
-        game["staff"].setdefault(key, value)
+        staff_state = game["staff"].setdefault(key, dict(value))
+        if not isinstance(staff_state, dict):
+            staff_state = dict(value)
+            game["staff"][key] = staff_state
+        staff_state.setdefault("trust", 0)
+        staff_state.setdefault("level", 0)
+        staff_state.setdefault("known", 1 if int(staff_state.get("level", 0)) > 0 else 0)
     game.setdefault("rate_plan", "standard")
     game.setdefault("next_rate_plan", game.get("rate_plan", "standard"))
     game.setdefault("promise", "balanced")
@@ -1541,7 +1557,7 @@ def _new_annual_stats() -> dict[str, Any]:
 
 
 def _new_staff_state() -> dict[str, dict[str, int]]:
-    return {key: {"trust": 0, "level": 0} for key in _STAFF}
+    return {key: {"trust": 0, "level": 0, "known": 0} for key in _STAFF}
 
 
 def _annual(game: dict[str, Any]) -> dict[str, Any]:
@@ -1586,15 +1602,58 @@ def _staff_memory(game: dict[str, Any], action: str) -> str:
     for key, spec in _STAFF.items():
         if action not in spec["action"]:
             continue
-        staff_state = state.setdefault(key, {"trust": 0, "level": 0})
+        staff_state = state.setdefault(key, {"trust": 0, "level": 0, "known": 0})
         staff_state["trust"] = int(staff_state.get("trust", 0)) + 1
+        trust = int(staff_state.get("trust", 0))
+        known = int(staff_state.get("known", 0))
+        if not known:
+            if trust >= 3:
+                staff_state["known"] = 1
+                staff_state["level"] = max(1, int(staff_state.get("level", 0)))
+                unlock = _unlock(game, spec["codex"])
+                lines.append("结识帮手：{}\nstaff记忆：{}{}".format(spec["meet"], spec["lines"][0], unlock))
+            elif trust == 1:
+                lines.append("帮手传闻：{}".format(spec["rumor"]))
+            continue
         level = int(staff_state.get("level", 0))
         threshold = (level + 1) * 3
         if level < len(spec["lines"]) and staff_state["trust"] >= threshold:
             staff_state["level"] = level + 1
-            unlock = _unlock(game, spec["codex"]) if level == 0 else ""
-            lines.append("staff记忆：{}{}".format(spec["lines"][level], unlock))
+            lines.append("staff记忆：{}".format(spec["lines"][level]))
     return "\n".join(line for line in lines if line)
+
+
+def _known_staff_count(game: dict[str, Any]) -> int:
+    staff = game.get("staff", {})
+    if not isinstance(staff, dict):
+        return 0
+    return sum(1 for state in staff.values() if isinstance(state, dict) and int(state.get("known", 0)))
+
+
+def _show_staff(game: dict[str, Any]) -> str:
+    staff = game.setdefault("staff", _new_staff_state())
+    known_lines = []
+    rumor_lines = []
+    for key, spec in _STAFF.items():
+        state = staff.setdefault(key, {"trust": 0, "level": 0, "known": 0})
+        trust = int(state.get("trust", 0))
+        level = int(state.get("level", 0))
+        if int(state.get("known", 0)):
+            next_at = (level + 1) * 3 if level < len(spec["lines"]) else 0
+            suffix = "，下次记忆约{}次信任".format(next_at) if next_at else "，记忆线已很稳"
+            known_lines.append("- {}：已结识，信任{}，记忆{}级{}。".format(spec["name"], trust, level, suffix))
+        elif trust:
+            rumor_lines.append("- {}：传闻 {}/3。".format(spec["name"], min(3, trust)))
+    if not known_lines and not rumor_lines:
+        return "帮手簿：还没有固定帮手。反复做好前厅、厨房、汤屋、客房或庭院相关行动，会让合适的人愿意来搭把手。"
+    lines = ["帮手簿："]
+    if known_lines:
+        lines.append("已结识：")
+        lines.extend(known_lines)
+    if rumor_lines:
+        lines.append("传闻：")
+        lines.extend(rumor_lines)
+    return "\n".join(lines)
 
 
 def _year_for_day(day: int) -> int:
@@ -2211,6 +2270,7 @@ def _status_line(game: dict[str, Any]) -> str:
         "todo": todo,
         "memory": game["memory"],
         "memory_seeds": _pending_memory_seed_count(game),
+        "staff": _known_staff_count(game),
         "codex": len(game["codex"]),
         "saved": True,
     }
@@ -2253,6 +2313,8 @@ def _handle_command(game: dict[str, Any], raw: str) -> str:
         return _guest_list(game)
     if _has(text, ["图鉴", "记忆", "memory", "codex", "album"]):
         return _show_codex(game)
+    if _has(text, ["帮手", "同伴", "staff", "伙伴"]):
+        return _show_staff(game)
     if _has(text, ["年度", "年报", "年终", "性格画像", "性格"]):
         return _annual_preview(game)
     if _has(text, ["存档列表", "列出存档", "saves"]):
@@ -2407,7 +2469,7 @@ def _brief_status(game: dict[str, Any]) -> str:
     return (
         (
             "{}，{}，{}{}，你在{}。钱{}，食材{}，柴火{}，体力{}/{}，客人{}位，"
-            + "房间{}/{}，定价{}，承诺{}，记忆{}，图鉴{}{}。{}"
+            + "房间{}/{}，定价{}，承诺{}，帮手{}位，记忆{}，图鉴{}{}。{}"
         ).format(
             _date_text(game["day"]),
             _time_label(game),
@@ -2424,6 +2486,7 @@ def _brief_status(game: dict[str, Any]) -> str:
             _room_capacity(game),
             _rate_plan(game)["name"],
             _promise(game)["name"],
+            _known_staff_count(game),
             game["memory"],
             len(game["codex"]),
             inspiration_text,

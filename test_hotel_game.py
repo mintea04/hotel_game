@@ -240,8 +240,14 @@ class HotelGameTests(unittest.TestCase):
 
     def test_staff_and_regular_memory_lines(self):
         hotel_game.new_game("staff-seed")
+        empty = hotel_game.cmd("帮手")
+        self.assertIn("还没有固定帮手", empty)
         staff = hotel_game.cmd("去 厨房; 备料; 备料; 备料")
-        self.assertIn("staff记忆", staff)
+        self.assertIn("帮手传闻", staff)
+        self.assertIn("结识帮手", staff)
+        self.assertEqual(status_from(staff)["staff"], 1)
+        roster = hotel_game.cmd("帮手")
+        self.assertIn("厨房阿姨", roster)
         hotel_game.new_game("regular-seed")
         regular = hotel_game.cmd("照顾 全部; 结束一天")
         self.assertIn("下次还想住同一间", regular)
