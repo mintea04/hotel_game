@@ -220,6 +220,78 @@ class HotelGameTests(unittest.TestCase):
         self.assertEqual(game["regulars"][0]["last_seen"], game["day"])
         self.assertEqual(game["regulars"][0]["visits"], 2)
 
+    def test_returning_guest_arrival_echo_uses_last_stay(self):
+        hotel_game.new_game("regular-echo")
+        game = hotel_game._GAME
+        guest = {
+            "name": "白灯",
+            "returning": True,
+            "returning_visit_no": 2,
+            "regular_last_stay": {
+                "weather": "雨",
+                "menu": "薄荷冷汤",
+                "promise": "餐食",
+            },
+        }
+        line = hotel_game._returning_arrival_line(game, guest)
+        self.assertIn("旧钥匙钩", line)
+        self.assertIn("《薄荷冷汤》", line)
+        self.assertIn("承诺《餐食》", line)
+        self.assertEqual(guest["note"], line)
+
+    def test_returning_guest_third_sleep_and_fourth_gift(self):
+        hotel_game.new_game("regular-scenes")
+        game = hotel_game._GAME
+        game["regulars"] = [
+            {
+                "key": "r1",
+                "name": "陆眠",
+                "type": "sleepless_poet",
+                "trait": "light_sleeper",
+                "visits": 2,
+                "affinity": 9,
+                "last_seen": 0,
+            },
+            {
+                "key": "r2",
+                "name": "林青",
+                "type": "botanist",
+                "trait": "nostalgic",
+                "visits": 3,
+                "affinity": 12,
+                "last_seen": 0,
+            },
+        ]
+        sleeper = {
+            "name": "陆眠",
+            "type": "sleepless_poet",
+            "trait": "light_sleeper",
+            "regular_key": "r1",
+            "mood": 5,
+            "meal": True,
+            "bath": True,
+            "complaint": False,
+        }
+        line = hotel_game._remember_regular(game, sleeper)
+        self.assertIn("终于睡到天亮", line)
+        self.assertEqual(game["regulars"][0]["visits"], 3)
+        botanist = {
+            "name": "林青",
+            "type": "botanist",
+            "trait": "nostalgic",
+            "regular_key": "r2",
+            "mood": 5,
+            "meal": True,
+            "bath": False,
+            "complaint": False,
+        }
+        before_memory = game["memory"]
+        gift = hotel_game._remember_regular(game, botanist)
+        self.assertIn("绣球干花", gift)
+        self.assertIn("记忆+2", gift)
+        self.assertEqual(game["memory"], before_memory + 2)
+        self.assertTrue(game["regulars"][1]["gifted"])
+
     def test_window_check_flag_is_actionable(self):
         hotel_game.new_game("window-seed")
         game = hotel_game._GAME

@@ -838,6 +838,15 @@ _SEASONAL_MENUS = {
     "winter": ["山茶热粥", "南天竹根菜汤", "雪夜炖萝卜", "覆雪豆乳锅"],
 }
 
+_REGULAR_GIFTS = {
+    "botanist": ("压在纸里的绣球干花", "memory", 2),
+    "sleepless_poet": ("终于写满的一张俳句纸", "memory", 2),
+    "apprentice_cook": ("一小包薄荷盐", "food", 1),
+    "umbrella_mender": ("补过一圈的新伞绳", "memory", 1),
+    "letter_carrier": ("一枚没有盖销的旧邮票", "memory", 1),
+    "bath_scholar": ("一支量温用的小玻璃管", "memory", 1),
+}
+
 _RATE_PLANS = {
     "budget": {
         "name": "亲民",
@@ -1530,6 +1539,10 @@ def _start_day(game: dict[str, Any]) -> str:
             _rate_plan(game)["name"],
         ),
     ]
+    for guest in game["guests"]:
+        returning_line = _returning_arrival_line(game, guest)
+        if returning_line:
+            lines.append(returning_line)
     if _day_of_season(game["day"]) == 1:
         lines.insert(1, "换季：{}{}".format(season["start"], _garden_scene(game)))
     if event_line:
@@ -1631,6 +1644,47 @@ def _trait_pool(game: dict[str, Any]) -> list[dict[str, Any]]:
     return _weighted_copy(_GUEST_TRAITS, adjust)
 
 
+def _stay_echo(last_stay: dict[str, Any]) -> str:
+    if not isinstance(last_stay, dict) or not last_stay:
+        return "上次离店时留下的那点安静，像还在门口等着。"
+    pieces = []
+    weather = str(last_stay.get("weather", ""))
+    if weather:
+        pieces.append("{}天".format(weather))
+    menu = str(last_stay.get("menu", ""))
+    if menu:
+        pieces.append("那道《{}》".format(menu))
+    elif last_stay.get("bath"):
+        pieces.append("温泉的白汽")
+    elif last_stay.get("meal"):
+        pieces.append("厨房的热气")
+    if last_stay.get("promise") and str(last_stay.get("promise")) != "均衡":
+        pieces.append("承诺《{}》".format(last_stay.get("promise")))
+    if not pieces:
+        return "上次住过的钥匙钩还空着，像特意给他留了位置。"
+    return "他还记得{}。".format("、".join(pieces))
+
+
+def _returning_arrival_line(game: dict[str, Any], guest: dict[str, Any]) -> str:
+    if not guest.get("returning"):
+        return ""
+    visit_no = int(guest.get("returning_visit_no", 2))
+    last_stay = guest.get("regular_last_stay", {})
+    echo = _stay_echo(last_stay if isinstance(last_stay, dict) else {})
+    if visit_no == 2:
+        line = "回头客：{}推门时先看向旧钥匙钩，像确认上次那间房还在。{}".format(guest["name"], echo)
+    elif visit_no == 3 and (guest.get("type") == "sleepless_poet" or guest.get("trait") == "light_sleeper"):
+        line = "回头客：{}第三次来，只轻声问：那间听得见水声的房还在吗？{}".format(guest["name"], echo)
+    elif visit_no == 3:
+        line = "回头客：{}第三次来，已经不用你多介绍前厅，只把伞放到上次的位置。{}".format(guest["name"], echo)
+    elif visit_no >= 4:
+        line = "回头客：{}第{}次回来，柜铃刚响，旅馆就像认出了脚步。{}".format(guest["name"], visit_no, echo)
+    else:
+        line = "回头客：{}又回来了。{}".format(guest["name"], echo)
+    guest["note"] = line
+    return line
+
+
 def _pick_returning_guest(game: dict[str, Any]) -> dict[str, Any] | None:
     regulars = [
         regular
@@ -1688,6 +1742,8 @@ def _build_guest(game: dict[str, Any], spec: dict[str, Any], trait: dict[str, An
         "codex": spec["codex"],
         "regular_key": returning.get("key", "") if returning else "",
         "returning": bool(returning),
+        "returning_visit_no": int(returning.get("visits", 0)) + 1 if returning else 1,
+        "regular_last_stay": returning.get("last_stay", {}) if returning else {},
         "wants_bath": wants_bath,
         "room": False,
         "meal": False,
@@ -2180,6 +2236,8 @@ def _guest_list(game: dict[str, Any]) -> str:
                 trait["line"],
             )
         )
+        if guest.get("note"):
+            lines.append("   回声：{}".format(guest["note"]))
     return "\n".join(lines)
 
 
@@ -2382,6 +2440,7 @@ def _serve_meals(game: dict[str, Any], text: str) -> str:
         guest["mood"] += mood
         served += 1
         menu = _seasonal_menu(game, guest["id"])
+        guest["meal_name"] = menu
         lines.append("给{}端上餐食《{}》，心情+{}。".format(guest["name"], menu, mood))
     if served:
         staff = _staff_memory(game, "meals")
@@ -2755,6 +2814,50 @@ def _annual_garden_note(stats: dict[str, Any]) -> str:
     return "庭院记录：这一年庭院自己换过四季，但你很少专门停下来听它。"
 
 
+def _regular_stay_record(game: dict[str, Any], guest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "day": int(game.get("day", 0)),
+        "date": _date_text(int(game.get("day", 1))),
+        "season": _season(game)["name"],
+        "weather": _weather(game)["name"],
+        "rate": _rate_plan(game)["name"],
+        "promise": _promise(game)["name"],
+        "menu": str(guest.get("meal_name", "")),
+        "meal": bool(guest.get("meal", False)),
+        "bath": bool(guest.get("bath", False)),
+        "complaint_left": bool(guest.get("complaint", False)),
+        "mood": int(guest.get("mood", 0)),
+    }
+
+
+def _regular_gift_line(game: dict[str, Any], guest: dict[str, Any], record: dict[str, Any], visit_no: int) -> str:
+    if visit_no < 4 or record.get("gifted") or int(guest.get("mood", 0)) < 3:
+        return ""
+    gift, key, amount = _REGULAR_GIFTS.get(
+        str(guest.get("type", "")),
+        ("一小束路边薄荷", "memory", 1),
+    )
+    record["gifted"] = True
+    if key == "food":
+        game["food"] += amount
+        _annual(game)["food_gained"] += amount
+        gain = "食材+{}".format(amount)
+    elif key == "wood":
+        game["wood"] += amount
+        _annual(game)["wood_gained"] += amount
+        gain = "柴火+{}".format(amount)
+    else:
+        game["memory"] += amount
+        _annual(game)["memory"] += amount
+        gain = "记忆+{}".format(amount)
+    return "{}第{}次回来时，把{}放在柜台边，说：上次被好好记住的人，也会想带点什么回来。{}".format(
+        guest["name"],
+        visit_no,
+        gift,
+        gain,
+    )
+
+
 def _remember_regular(game: dict[str, Any], guest: dict[str, Any]) -> str:
     regulars = game.setdefault("regulars", [])
     key = guest.get("regular_key", "")
@@ -2778,25 +2881,39 @@ def _remember_regular(game: dict[str, Any], guest: dict[str, Any]) -> str:
             "visits": 0,
             "affinity": 0,
             "last_seen": 0,
+            "history": [],
         }
         regulars.append(record)
         first_time = True
     record["visits"] = int(record.get("visits", 0)) + 1
+    visit_no = int(record["visits"])
     if mood >= 3:
         record["affinity"] = int(record.get("affinity", 0)) + max(1, mood)
     else:
         record["affinity"] = max(0, int(record.get("affinity", 0)) - 1)
     record["last_seen"] = int(game["day"])
     guest["regular_key"] = key
+    stay = _regular_stay_record(game, guest)
+    history = record.setdefault("history", [])
+    if isinstance(history, list):
+        history.append(stay)
+        record["history"] = history[-5:]
+    record["last_stay"] = stay
     if mood < 3:
         return "{}这次没有多说，只把钥匙牌轻轻放回柜台。".format(guest["name"])
     if first_time and mood >= 5:
         return "{}离店时回头看了一眼，说下次还想住同一间。".format(guest["name"])
-    if not first_time and int(record["visits"]) == 2:
+    if not first_time and visit_no == 2:
         unlock = _unlock(game, "returning_card")
         return "{}把上次的钥匙牌号码说对了，像把旅馆也记在路上。{}".format(guest["name"], unlock)
-    if not first_time and int(record["visits"]) > 2:
-        return "{}已经第{}次回来，前厅听见脚步就认出来了。".format(guest["name"], record["visits"])
+    if not first_time and visit_no == 3 and (guest.get("type") == "sleepless_poet" or guest.get("trait") == "light_sleeper"):
+        return "{}第三次离店时，把枕边那张空白俳句纸折好，说昨夜终于睡到天亮。".format(guest["name"])
+    if not first_time and visit_no == 3:
+        return "{}第三次离店时没有急着走，只把这次的房牌号码也记在票根背面。".format(guest["name"])
+    if not first_time and visit_no > 3:
+        gift = _regular_gift_line(game, guest, record, visit_no)
+        base = "{}已经第{}次回来，前厅听见脚步就认出来了。".format(guest["name"], visit_no)
+        return "{}\n{}".format(base, gift) if gift else base
     return ""
 
 
